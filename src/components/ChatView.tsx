@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { contextFor, deleteMessage, dismissMemoryError, editMessage, regenerate, send, stopGeneration, updateRoom, useApp } from "../lib/store";
+import { downloadBlob, roomToTxt, safeFileName } from "../lib/exporters";
+import { contextFor, novelFromRoom, deleteMessage, dismissMemoryError, editMessage, regenerate, send, stopGeneration, updateRoom, useApp } from "../lib/store";
 import { PROVIDER_LABEL } from "../lib/providers/catalog";
 import MessageView, { StoryText } from "./Message";
 import RoomDialog from "./RoomDialog";
@@ -49,6 +50,10 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
         <>
           <button className="btn-ghost max-w-40 px-2 text-xs" onClick={() => setRoomDialog("cast")} title="이야기 설정">📝 <span className="truncate">{ctx.world ? ctx.world.name : "설정"}{ctx.characters.length ? ` · ${ctx.characters.length}명` : ""}</span></button>
           <button className="btn-ghost px-2 text-xs" onClick={() => setRoomDialog("memory")} title="장기 기억">🧠{myMemory && !myMemory.error ? "…" : ""}</button>
+          <MoreMenu items={[
+            ["📄 대화를 TXT로 내보내기", () => downloadBlob(`${safeFileName(room.title)}.txt`, roomToTxt(room, { user: ctx.persona?.name }), "text/plain;charset=utf-8")],
+            ["📖 이 이야기로 소설 기획하기", () => novelFromRoom(room.id)],
+          ]} />
           <button className="btn-ghost hidden px-2 text-xs sm:inline-flex" onClick={() => onOpenSettings("ai")} title="AI 모델">{PROVIDER_LABEL[settings.provider]} · {settings.models[settings.provider]}</button>
         </>
       } />
@@ -135,5 +140,24 @@ function Header({ onMenu, title, onTitle, right }: { onMenu: () => void; title: 
       )}
       {right}
     </header>
+  );
+}
+
+function MoreMenu({ items }: { items: [string, () => void][] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button className="btn-ghost px-2 text-xs" onClick={() => setOpen(!open)} aria-label="더 보기">⋯</button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-20 mt-1 w-60 rounded-xl border border-stone-200 bg-white p-1 shadow-lg dark:border-stone-800 dark:bg-stone-900">
+            {items.map(([label, fn]) => (
+              <button key={label} className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-stone-100 dark:hover:bg-stone-800" onClick={() => { setOpen(false); fn(); }}>{label}</button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   );
 }

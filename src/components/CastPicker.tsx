@@ -7,7 +7,7 @@ export interface Cast {
 }
 
 /** 이야기방의 세계관 · 등장인물 · 주인공 선택 */
-export default function CastPicker({ value, onChange, onOpenLibrary }: { value: Cast; onChange: (c: Cast) => void; onOpenLibrary?: () => void }) {
+export default function CastPicker({ value, onChange, onOpenLibrary, personaLabel = "🙋 주인공 (내가 연기)" }: { value: Cast; onChange: (c: Cast) => void; onOpenLibrary?: () => void; personaLabel?: string }) {
   const lib = useApp((s) => s.library);
   const worlds = entitiesOf(lib, "world");
   const chars = entitiesOf(lib, "character");
@@ -38,7 +38,7 @@ export default function CastPicker({ value, onChange, onOpenLibrary }: { value: 
           </select>
         </div>
         <div>
-          <span className="label">🙋 주인공 (내가 연기)</span>
+          <span className="label">{personaLabel}</span>
           <select className="input" value={value.personaId ?? ""} onChange={(e) => onChange({ ...value, personaId: e.target.value || undefined })} aria-label="주인공 선택">
             <option value="">지정 안 함</option>
             {personas.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}

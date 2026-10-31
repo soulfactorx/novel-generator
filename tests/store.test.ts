@@ -157,3 +157,72 @@ describe("library & memory in store", () => {
     expect(s.getState().legacyExtra).toBeNull();
   });
 });
+
+describe("novels in store", () => {
+  const outlineText = "[1화] 비 오는 밤\n밀수선 발견.\n\n[2화] 조합\n잠입.\n\n[3화] 진실\n결말.";
+  test("outline → sequential writing → persisted; extend keeps written episodes", async () => {
+    let s = await freshStore();
+    s.updateSettings({ provider: "anthropic", keys });
+    const id = s.createNovel({ title: "비의 항구", brief: "밀수", episodeCount: 3 });
+    expect(s.getState().view).toBe("novels");
+    let calls = mockFetch(claudeStream(outlineText));
+    expect(await s.generateOutline(id)).toBe(true);
+    expect(s.getState().novels[id].outline.map((o) => o.title)).toEqual(["비 오는 밤", "조합", "진실"]);
+    calls = mockFetch(claudeStream("첫 화 본문.\n\n[회차 요약]\n발견했다."), claudeStream("둘째 화 본문.\n\n[회차 요약]\n잠입했다."), claudeStream("셋째 화 본문.\n\n[회차 요약]\n끝."));
+    expect(await s.writeEpisodes(id, 2)).toBe(3);
+    const n = s.getState().novels[id];
+    expect(n.episodes.map((e) => [e.title, e.text, e.summary])).toEqual([["비 오는 밤", "첫 화 본문.", "발견했다."], ["조합", "둘째 화 본문.", "잠입했다."], ["진실", "셋째 화 본문.", "끝."]]);
+    expect(calls[2].body.messages[0].content[0].text ?? calls[2].body.messages[0].content).toContain("[2화] 조합: 잠입했다.");
+    expect(calls[0].body.max_tokens).toBe(9000 + 16000);
+    // 회차 늘리고 이어서 개요
+    s.updateNovel(id, { episodeCount: 5 });
+    calls = mockFetch(claudeStream("[4화] 후일담\n정리.\n\n[5화] 새 사건\n시작."));
+    await s.generateOutline(id, 3);
+    expect(s.getState().novels[id].outline.map((o) => o.title)).toEqual(["비 오는 밤", "조합", "진실", "후일담", "새 사건"]);
+    await s.flush();
+    s = await freshStore();
+    expect(s.getState().novels[id].episodes).toHaveLength(3);
+    expect(s.getState().activeNovelId).toBe(id);
+  });
+
+  test("guards: needs outline, writes in order; errors stop the sequence; stop keeps a long partial as incomplete", async () => {
+    const s = await freshStore();
+    s.updateSettings({ provider: "anthropic", keys });
+    const id = s.createNovel({ episodeCount: 3 });
+    expect(await s.writeEpisode(id, 0)).toBe(false);
+    expect(s.getState().novelError?.message).toContain("개요가 없습니다");
+    s.updateNovel(id, { outline: [{ id: "a", title: "A", summary: "" }, { id: "b", title: "B", summary: "" }, { id: "c", title: "C", summary: "" }] });
+    expect(await s.writeEpisode(id, 1)).toBe(false);
+    mockFetch(claudeStream("A 본문"), json({ type: "error", error: { type: "invalid_request_error", message: "bad" } }, 400));
+    expect(await s.writeEpisodes(id, 2)).toBe(1);
+    expect(s.getState().novelError).not.toBeNull();
+    // 중단: 스트림 일부만 오고 멈춤
+    const enc = new TextEncoder();
+    vi.stubGlobal("fetch", (_u: string, init: RequestInit) => Promise.resolve(new Response(new ReadableStream({
+      start(c) {
+        c.enqueue(enc.encode(`event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { model: "m", usage: { input_tokens: 1 } } })}\n\nevent: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "긴 원고 ".repeat(150) } })}\n\n`));
+        init.signal!.addEventListener("abort", () => c.error(Object.assign(new Error("aborted"), { name: "AbortError" })));
+      },
+    }), { status: 200, headers: { "content-type": "text/event-stream" } })));
+    const p = s.writeEpisode(id, 1);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(s.getState().novelLive?.text).toContain("긴 원고");
+    s.stopNovel();
+    expect(await p).toBe(false);
+    const e = s.getState().novels[id].episodes[1];
+    expect(e.incomplete).toBe(true);
+    expect(s.getState().novelLive).toBeNull();
+  });
+
+  test("novel from room copies cast and memory; deleting a character unlinks novels", async () => {
+    const s = await freshStore();
+    const c = s.createEntity("character", "서율");
+    const rid = s.createRoom({ title: "항구 이야기", premise: "비 오는 도시", characterIds: [c] });
+    s.updateRoom(rid, { memory: "- 첫 만남" });
+    const nid = s.novelFromRoom(rid)!;
+    expect(s.getState().novels[nid]).toMatchObject({ title: "항구 이야기", characterIds: [c] });
+    expect(s.getState().novels[nid].brief).toContain("- 첫 만남");
+    s.deleteEntity(c);
+    expect(s.getState().novels[nid].characterIds).toEqual([]);
+  });
+});

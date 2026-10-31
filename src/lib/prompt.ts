@@ -11,7 +11,7 @@ export const RATING_POLICY: Record<ContentRating, string> = {
     "콘텐츠 등급: 성인. 사용자는 성인임을 확인했다. 등장인물은 모두 성인이며 합의된 관계만 다룬다. 장면의 맥락과 관계 진전에 맞게 표현 수위를 조절하고, 이야기 전개를 우선한다. 미성년자, 비동의 성적 묘사, 실존 인물은 어떤 경우에도 다루지 않는다.",
 };
 
-const POV: Record<StyleOptions["pov"], string> = {
+export const POV: Record<StyleOptions["pov"], string> = {
   "third-limited": "3인칭 제한 시점. 주인공의 내면만 직접 서술하고 다른 인물은 말과 행동으로 드러낸다.",
   first: "1인칭 주인공 시점. '나'는 주인공뿐이며 다른 인물의 속마음은 추측으로만 표현한다.",
   "third-omniscient": "3인칭 전지적 시점. 여러 인물의 내면을 오갈 수 있으나 전환은 문단으로 분명히 구분한다.",
@@ -21,12 +21,12 @@ const LENGTH: Record<StyleOptions["length"], [string, number]> = {
   medium: ["한 번에 1,000~1,600자 정도로 쓴다.", 3500],
   long: ["한 번에 2,500~3,500자 정도로 충분히 길게 쓴다.", 7000],
 };
-const PACING: Record<StyleOptions["pacing"], string> = {
+export const PACING: Record<StyleOptions["pacing"], string> = {
   fast: "사건 중심으로 빠르게 전개한다.",
   balanced: "행동, 대사, 내면 묘사를 고르게 섞는다.",
   slow: "감각과 분위기, 작은 표정 변화까지 천천히 묘사한다.",
 };
-const DIALOGUE: Record<StyleOptions["dialogue"], string> = {
+export const DIALOGUE: Record<StyleOptions["dialogue"], string> = {
   balanced: "대사와 서술의 비중을 비슷하게 맞춘다.",
   more: "인물 간 대화를 중심으로 주고받는 흐름을 살린다.",
   less: "서술과 묘사를 중심으로 하고 대사는 꼭 필요한 만큼만 쓴다.",
@@ -64,6 +64,15 @@ export function buildSystemPrompt(s: Settings, room: Room, ctx: StoryContext = {
       `본문을 마친 뒤 빈 줄을 두고 "${CHOICE_MARKER}" 한 줄을 쓴 다음, 주인공이 할 수 있는 서로 다른 다음 행동 4가지를 "1. "부터 번호를 붙여 한 줄씩 짧게 제시한다.`,
     );
   }
+  parts.push(...contextSections(ctx, "chat"));
+  if (room.premise.trim()) parts.push("", ctx.world || ctx.characters.length ? "## 이 이야기의 추가 설정" : "## 이야기 설정", room.premise.trim());
+  if (room.memory.trim()) parts.push("", "## 지금까지의 줄거리 요약 (참고용, 문장을 그대로 반복하지 말 것)", room.memory.trim());
+  return parts.join("\n");
+}
+
+/** 세계관 · 주인공 · 등장인물 섹션 (대화형/소설 공용) */
+export function contextSections(ctx: StoryContext, mode: "chat" | "novel"): string[] {
+  const parts: string[] = [];
   const w = ctx.world;
   if (w) {
     parts.push("", `## 세계관: ${w.name}`);
@@ -71,9 +80,9 @@ export function buildSystemPrompt(s: Settings, room: Room, ctx: StoryContext = {
     if (w.rules.trim()) parts.push("", "### 이 세계의 규칙", w.rules.trim());
   }
   if (ctx.persona) {
-    parts.push("", `## 주인공 (사용자가 연기하는 인물): ${ctx.persona.name}`);
+    parts.push("", mode === "chat" ? `## 주인공 (사용자가 연기하는 인물): ${ctx.persona.name}` : `## 주인공: ${ctx.persona.name}`);
     if (ctx.persona.profile.trim()) parts.push(ctx.persona.profile.trim());
-    parts.push("주인공의 행동·대사·속마음은 사용자가 정한다. 사용자가 쓰지 않은 주인공의 대사를 지어내지 않는다.");
+    if (mode === "chat") parts.push("주인공의 행동·대사·속마음은 사용자가 정한다. 사용자가 쓰지 않은 주인공의 대사를 지어내지 않는다.");
   }
   if (ctx.characters.length) {
     parts.push("", "## 등장인물");
@@ -83,9 +92,7 @@ export function buildSystemPrompt(s: Settings, room: Room, ctx: StoryContext = {
       if (c.speech.trim()) parts.push("말투 예시:", c.speech.trim());
     }
   }
-  if (room.premise.trim()) parts.push("", ctx.world || ctx.characters.length ? "## 이 이야기의 추가 설정" : "## 이야기 설정", room.premise.trim());
-  if (room.memory.trim()) parts.push("", "## 지금까지의 줄거리 요약 (참고용, 문장을 그대로 반복하지 말 것)", room.memory.trim());
-  return parts.join("\n");
+  return parts;
 }
 
 /** AI에게 보낼 대화: 최근 N개, 오류 메시지 제외, 첫 메시지는 user 로 시작 */

@@ -1,9 +1,10 @@
-import type { Entity, Room } from "./types";
+import type { Entity, Novel, Room } from "./types";
 
 /**
  * IndexedDB 저장소 — 레코드 단위로 바뀐 것만 저장
  *  v1: kv(설정 등) + rooms(이야기방)
  *  v2: + library(세계관·등장인물·주인공, kind 필드로 구분)
+ *  v3: + novels(소설: 개요 + 회차)
  */
 const DB_NAME = "novel-generator";
 let dbp: Promise<IDBDatabase> | null = null;
@@ -23,12 +24,13 @@ const done = (t: IDBTransaction) =>
 export function openDB(): Promise<IDBDatabase> {
   if (!dbp)
     dbp = new Promise((res, rej) => {
-      const r = indexedDB.open(DB_NAME, 2);
+      const r = indexedDB.open(DB_NAME, 3);
       r.onupgradeneeded = () => {
         const d = r.result;
         if (!d.objectStoreNames.contains("kv")) d.createObjectStore("kv");
         if (!d.objectStoreNames.contains("rooms")) d.createObjectStore("rooms", { keyPath: "id" });
         if (!d.objectStoreNames.contains("library")) d.createObjectStore("library", { keyPath: "id" });
+        if (!d.objectStoreNames.contains("novels")) d.createObjectStore("novels", { keyPath: "id" });
       };
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
@@ -36,13 +38,13 @@ export function openDB(): Promise<IDBDatabase> {
   return dbp;
 }
 
-export async function loadAll(): Promise<{ kv: Record<string, unknown>; rooms: Room[]; library: Entity[] }> {
+export async function loadAll(): Promise<{ kv: Record<string, unknown>; rooms: Room[]; library: Entity[]; novels: Novel[] }> {
   const d = await openDB();
-  const t = d.transaction(["kv", "rooms", "library"], "readonly");
-  const [keys, vals, rooms, library] = await Promise.all([req(t.objectStore("kv").getAllKeys()), req(t.objectStore("kv").getAll()), req(t.objectStore("rooms").getAll()), req(t.objectStore("library").getAll())]);
+  const t = d.transaction(["kv", "rooms", "library", "novels"], "readonly");
+  const [keys, vals, rooms, library, novels] = await Promise.all([req(t.objectStore("kv").getAllKeys()), req(t.objectStore("kv").getAll()), req(t.objectStore("rooms").getAll()), req(t.objectStore("library").getAll()), req(t.objectStore("novels").getAll())]);
   const kv: Record<string, unknown> = {};
   keys.forEach((k, i) => (kv[String(k)] = vals[i]));
-  return { kv, rooms: rooms as Room[], library: library as Entity[] };
+  return { kv, rooms: rooms as Room[], library: library as Entity[], novels: novels as Novel[] };
 }
 
 export async function deleteKV(key: string): Promise<void> {
@@ -59,7 +61,7 @@ export async function putKV(key: string, value: unknown): Promise<void> {
   await done(t);
 }
 
-export async function putRecords(store: "rooms" | "library", records: { id: string }[], deleted: string[] = []): Promise<void> {
+export async function putRecords(store: "rooms" | "library" | "novels", records: { id: string }[], deleted: string[] = []): Promise<void> {
   if (!records.length && !deleted.length) return;
   const d = await openDB();
   const t = d.transaction(store, "readwrite");

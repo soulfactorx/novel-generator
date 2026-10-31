@@ -64,3 +64,30 @@ test("library: create world + character, start a story from it", async () => {
   expect(room.characterIds).toHaveLength(1);
   expect(document.body.textContent).toContain("🎭 서율");
 });
+
+test("novel: plan → AI outline → write episode → read → export menu", async () => {
+  const { claudeStream, mockFetch } = await import("./helpers");
+  const store = await import("../src/lib/store");
+  store.updateSettings({ provider: "anthropic", keys: { gemini: "", anthropic: "ak", openai: "" } });
+  await act(async () => byText("📖 소설")!.click());
+  expect(document.body.textContent).toContain("AI와 함께 연재 소설을 써 보세요");
+  await act(async () => byText("+ 새 소설")!.click());
+  setVal(document.querySelector('[aria-label="기획"]') as HTMLTextAreaElement, "항구 도시 미스터리");
+  await wait();
+  await act(async () => byText("다음: 개요")!.click());
+  mockFetch(claudeStream("[1화] 비 오는 밤\n밀수선 발견.\n\n[2화] 조합\n잠입."));
+  await act(async () => byText("AI로 개요 만들기")!.click());
+  await wait(50);
+  expect((document.querySelector('[aria-label="1화 제목"]') as HTMLInputElement).value).toBe("비 오는 밤");
+  await act(async () => byText("원고 쓰기")!.click());
+  mockFetch(claudeStream("빗속에서 배 한 척이 들어왔다.\n\n[회차 요약]\n배가 왔다."));
+  await act(async () => byText("1화 쓰기")!.click());
+  await wait(50);
+  expect(document.body.textContent).toContain("1/");
+  await act(async () => [...document.querySelectorAll("button")].find((b) => b.textContent?.includes("비 오는 밤") && b.textContent.includes("자"))!.click());
+  expect(document.body.textContent).toContain("빗속에서 배 한 척이 들어왔다.");
+  expect(document.body.textContent).not.toContain("[회차 요약]");
+  await act(async () => byText("⬇ 내보내기")!.click());
+  expect(byText("EPUB")).toBeTruthy();
+  expect(byText("TXT")).toBeTruthy();
+});

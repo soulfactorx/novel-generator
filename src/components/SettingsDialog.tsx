@@ -1,11 +1,11 @@
 import { useRef, useState, type ReactNode } from "react";
-import { backupLibrary, download, isOwnBackup, makeBackup } from "../lib/backup";
+import { backupLibrary, backupNovels, download, isOwnBackup, makeBackup } from "../lib/backup";
 import { parseLegacyBackup, type LegacyImport } from "../lib/importLegacy";
 import { listModels } from "../lib/modelList";
 import { testConnection } from "../lib/providers";
 import { CLAUDE_MODELS, GEMINI_MODELS, OPENAI_PRESETS, PROVIDER_LABEL } from "../lib/providers/catalog";
 import { RATING_POLICY } from "../lib/prompt";
-import { getState, importLegacy, importLegacyExtra, updateSettings, upsertLibrary, upsertRooms, useApp } from "../lib/store";
+import { getState, importLegacy, importLegacyExtra, updateSettings, upsertLibrary, upsertNovels, upsertRooms, useApp } from "../lib/store";
 import type { ContentRating, ProviderId, Room, Settings, StyleOptions } from "../lib/types";
 import Dialog from "./Dialog";
 
@@ -185,6 +185,7 @@ function RatingTab() {
 function DataTab() {
   const rooms = useApp((x) => x.rooms);
   const library = useApp((x) => x.library);
+  const novels = useApp((x) => x.novels);
   const legacyExtra = useApp((x) => x.legacyExtra);
   const settings = useApp((x) => x.settings);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -198,9 +199,11 @@ function DataTab() {
       if (isOwnBackup(j)) {
         const lib = backupLibrary(j);
         upsertLibrary(lib);
+        const nv = backupNovels(j);
+        upsertNovels(nv);
         upsertRooms(j.rooms as Room[]);
         if (j.settings) updateSettings({ ...(j.settings as Partial<Settings>), keys: { ...settings.keys, ...Object.fromEntries(Object.entries((j.settings as Settings).keys || {}).filter(([, v]) => v)) } });
-        setMsg({ ok: true, text: `✅ 백업에서 이야기 ${j.rooms.length}개${lib.length ? `, 라이브러리 항목 ${lib.length}개` : ""}를 복원했습니다.` });
+        setMsg({ ok: true, text: `✅ 백업에서 이야기 ${j.rooms.length}개${lib.length ? `, 라이브러리 항목 ${lib.length}개` : ""}${nv.length ? `, 소설 ${nv.length}편` : ""}을 복원했습니다.` });
       } else setPending(parseLegacyBackup(j));
     } catch (e) {
       setMsg({ ok: false, text: `❌ ${(e as Error).message}` });
@@ -210,9 +213,9 @@ function DataTab() {
     <div className="space-y-4">
       <div className="card space-y-2">
         <div className="font-bold">💾 백업 내려받기</div>
-        <p className="hint">모든 이야기, 세계관·인물, 설정을 JSON 파일로 저장합니다. 데이터는 이 브라우저에만 있으니 가끔 백업해 두세요.</p>
+        <p className="hint">모든 이야기, 소설, 세계관·인물, 설정을 JSON 파일로 저장합니다. 데이터는 이 브라우저에만 있으니 가끔 백업해 두세요.</p>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={withKeys} onChange={(e) => setWithKeys(e.target.checked)} /> API 키 포함 (파일 보관에 주의)</label>
-        <button className="btn-primary" onClick={() => download(`novel-generator-backup-${new Date().toISOString().slice(0, 10)}.json`, makeBackup(settings, Object.values(rooms), Object.values(library), withKeys))}>백업 파일 저장</button>
+        <button className="btn-primary" onClick={() => download(`novel-generator-backup-${new Date().toISOString().slice(0, 10)}.json`, makeBackup(settings, Object.values(rooms), Object.values(library), withKeys, Object.values(novels)))}>백업 파일 저장</button>
       </div>
       <div className="card space-y-2">
         <div className="font-bold">📥 백업 가져오기</div>
@@ -221,10 +224,10 @@ function DataTab() {
         <button className="btn-ghost border border-stone-300 dark:border-stone-700" onClick={() => fileRef.current?.click()}>파일 선택</button>
         {pending && (
           <div className="space-y-2 rounded-lg bg-violet-50 p-3 text-sm dark:bg-violet-950/40">
-            <div>E.No.S 백업: 이야기 <b>{pending.rooms.length}</b>개 · 세계관 <b>{pending.library.filter((e) => e.kind === "world").length}</b>개 · 등장인물 <b>{pending.library.filter((e) => e.kind === "character").length}</b>명 · 주인공 <b>{pending.library.filter((e) => e.kind === "persona").length}</b>명</div>
+            <div>E.No.S 백업: 이야기 <b>{pending.rooms.length}</b>개 · 세계관 <b>{pending.library.filter((e) => e.kind === "world").length}</b>개 · 등장인물 <b>{pending.library.filter((e) => e.kind === "character").length}</b>명 · 주인공 <b>{pending.library.filter((e) => e.kind === "persona").length}</b>명 · 소설 <b>{pending.novels.length}</b>편</div>
             {pending.settingsPatch.keys && <label className="flex items-center gap-2"><input type="checkbox" checked={importKeys} onChange={(e) => setImportKeys(e.target.checked)} /> 백업에 있는 API 키도 가져오기</label>}
             <div className="flex gap-2">
-              <button className="btn-primary" onClick={() => { importLegacy(pending, importKeys); setMsg({ ok: true, text: `✅ 이야기 ${pending.rooms.length}개를 가져왔습니다.` }); setPending(null); }}>가져오기</button>
+              <button className="btn-primary" onClick={() => { importLegacy(pending, importKeys); setMsg({ ok: true, text: `✅ 이야기 ${pending.rooms.length}개, 소설 ${pending.novels.length}편을 가져왔습니다.` }); setPending(null); }}>가져오기</button>
               <button className="btn-ghost" onClick={() => setPending(null)}>취소</button>
             </div>
           </div>

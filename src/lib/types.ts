@@ -25,6 +25,7 @@ export interface Settings {
   style: StyleOptions;
   theme: "system" | "light" | "dark";
   autoMemory: boolean; // 오래된 대화를 장기 기억으로 자동 정리
+  readerFontSize: number; // 소설 읽기 글자 크기(px)
 }
 
 export type Role = "user" | "assistant";
@@ -112,6 +113,7 @@ export const DEFAULT_SETTINGS: Settings = {
   style: { pov: "third-limited", length: "medium", pacing: "balanced", dialogue: "balanced" },
   theme: "system",
   autoMemory: true,
+  readerFontSize: 18,
 };
 
 /** 저장된 설정을 기본값과 병합 (새 항목이 추가돼도 안전) */
@@ -128,6 +130,55 @@ export function normalizeSettings(raw: unknown): Settings {
   // 성인 확인 없이 adult 로 저장될 수 없음
   if (s.contentRating === "adult" && !s.adultConfirmed) s.contentRating = "mature";
   s.temperature = Math.min(1, Math.max(0, Number(s.temperature) || 0));
+  s.readerFontSize = Math.min(28, Math.max(13, Math.round(Number(s.readerFontSize) || 18)));
   s.contextMessages = Math.min(400, Math.max(4, Math.round(Number(s.contextMessages) || 40)));
   return s;
+}
+
+/* ---------------- 소설 (자동 집필 · 서고) ---------------- */
+export type EpisodeLength = "short" | "medium" | "long";
+export interface OutlineItem {
+  id: string;
+  title: string;
+  summary: string; // 이 회차에서 일어날 일 (계획)
+}
+export interface Episode {
+  id: string;
+  title: string;
+  text: string;
+  summary: string; // 실제로 쓴 내용 요약 (다음 회차 집필 때 참고)
+  model?: string;
+  incomplete?: boolean; // 중단·분량 초과로 끝까지 쓰지 못함
+  createdAt: number;
+  updatedAt: number;
+}
+export interface Novel {
+  id: string;
+  title: string;
+  author: string;
+  genre: string;
+  brief: string; // 기획 · 시놉시스 · 요청 사항
+  worldId?: string;
+  characterIds: string[];
+  personaId?: string; // 주인공
+  episodeCount: number; // 목표 회차 수
+  episodeLength: EpisodeLength;
+  outline: OutlineItem[]; // outline[i] ↔ episodes[i]
+  episodes: Episode[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export function normalizeNovel(raw: Novel): Novel {
+  return {
+    ...raw,
+    author: raw.author ?? "",
+    genre: raw.genre ?? "",
+    brief: raw.brief ?? "",
+    characterIds: Array.isArray(raw.characterIds) ? raw.characterIds : [],
+    episodeCount: Math.min(200, Math.max(1, Math.round(Number(raw.episodeCount) || 10))),
+    episodeLength: (["short", "medium", "long"] as const).includes(raw.episodeLength) ? raw.episodeLength : "medium",
+    outline: Array.isArray(raw.outline) ? raw.outline : [],
+    episodes: Array.isArray(raw.episodes) ? raw.episodes : [],
+  };
 }

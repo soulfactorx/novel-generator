@@ -7,7 +7,8 @@ import { formatLore, matchLore, type LoreHit } from "./lore";
 import { buildMemoryRequest, cleanMemory, pendingForMemory } from "./memory";
 import { buildHistory, buildSystemPrompt, outputTokensFor, type StoryContext } from "./prompt";
 import { generate, ProviderError, type Usage } from "./providers";
-import { DEFAULT_SETTINGS, normalizeRoom, normalizeSettings, type Character, type Entity, type EntityKind, type Message, type Persona, type Room, type Settings, type World } from "./types";
+import { buildEpisodeRequest, buildOutlineRequest, EPISODE_LENGTH, parseOutline, previewEpisode, splitEpisode } from "./novel";
+import { DEFAULT_SETTINGS, normalizeNovel, normalizeRoom, normalizeSettings, type Character, type Entity, type EntityKind, type Episode, type Message, type Novel, type Persona, type Room, type Settings, type World } from "./types";
 
 export interface LiveState {
   roomId: string;
@@ -28,12 +29,27 @@ export interface AppState {
   memoryJob: { roomId: string; error?: string } | null;
   lastUsage: (Usage & { model: string }) | null;
   legacyExtra: LegacyImport["extra"] | null;
+  view: "rooms" | "novels";
+  novels: Record<string, Novel>;
+  activeNovelId: string | null;
+  novelLive: NovelLive | null;
+  novelError: { novelId: string; message: string } | null;
+}
+export interface NovelLive {
+  novelId: string;
+  task: "outline" | "episode";
+  index: number; // 쓰는 중인 회차 (0부터)
+  until?: number; // 연속 집필 목표 (이 회차까지)
+  text: string;
+  thinking: string;
+  status: string;
+  startedAt: number;
 }
 
-let state: AppState = { ready: false, storageError: "", settings: DEFAULT_SETTINGS, rooms: {}, library: {}, activeRoomId: null, live: null, memoryJob: null, lastUsage: null, legacyExtra: null };
+let state: AppState = { ready: false, storageError: "", settings: DEFAULT_SETTINGS, rooms: {}, library: {}, activeRoomId: null, live: null, memoryJob: null, lastUsage: null, legacyExtra: null, view: "rooms", novels: {}, activeNovelId: null, novelLive: null, novelError: null };
 const subs = new Set<() => void>();
-const dirty = { rooms: new Set<string>(), library: new Set<string>() };
-const deleted = { rooms: new Set<string>(), library: new Set<string>() };
+const dirty = { rooms: new Set<string>(), library: new Set<string>(), novels: new Set<string>() };
+const deleted = { rooms: new Set<string>(), library: new Set<string>(), novels: new Set<string>() };
 let settingsDirty = false;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let controller: AbortController | null = null;
@@ -62,20 +78,26 @@ export async function flush() {
   };
   const rooms = take(dirty.rooms, (id) => state.rooms[id]);
   const lib = take(dirty.library, (id) => state.library[id]);
+  const nov = take(dirty.novels, (id) => state.novels[id]);
   const delRooms = [...deleted.rooms];
   const delLib = [...deleted.library];
+  const delNov = [...deleted.novels];
   deleted.rooms.clear();
   deleted.library.clear();
+  deleted.novels.clear();
   const saveSettings = settingsDirty;
   settingsDirty = false;
   try {
     await putRecords("rooms", rooms.items, delRooms);
     await putRecords("library", lib.items, delLib);
+    await putRecords("novels", nov.items, delNov);
     if (saveSettings) await putKV("settings", state.settings);
     if (state.storageError) setState({ storageError: "" });
   } catch (e) {
     rooms.ids.forEach((id) => dirty.rooms.add(id));
     lib.ids.forEach((id) => dirty.library.add(id));
+    nov.ids.forEach((id) => dirty.novels.add(id));
+    delNov.forEach((id) => deleted.novels.add(id));
     delRooms.forEach((id) => deleted.rooms.add(id));
     delLib.forEach((id) => deleted.library.add(id));
     settingsDirty ||= saveSettings;
@@ -87,14 +109,17 @@ if (typeof document !== "undefined") document.addEventListener("visibilitychange
 
 export async function init() {
   try {
-    const { kv, rooms, library } = await loadAll();
+    const { kv, rooms, library, novels } = await loadAll();
+    const nmap: Record<string, Novel> = {};
+    novels.forEach((n) => (nmap[n.id] = normalizeNovel(n)));
+    const recentNovel = Object.values(nmap).sort((a, b) => b.updatedAt - a.updatedAt)[0];
     const map: Record<string, Room> = {};
     rooms.forEach((r) => (map[r.id] = normalizeRoom(r)));
     const lib: Record<string, Entity> = {};
     library.forEach((e) => (lib[e.id] = e));
     const recent = Object.values(map).sort((a, b) => b.updatedAt - a.updatedAt)[0];
     const extra = (kv.legacyExtra as LegacyImport["extra"]) || null;
-    setState({ ready: true, settings: normalizeSettings(kv.settings), rooms: map, library: lib, activeRoomId: recent?.id ?? null, legacyExtra: extra && (extra.worlds?.length || extra.characters?.length || extra.personas?.length) ? extra : null });
+    setState({ ready: true, settings: normalizeSettings(kv.settings), rooms: map, library: lib, activeRoomId: recent?.id ?? null, novels: nmap, activeNovelId: recentNovel?.id ?? null, view: kv.view === "novels" ? "novels" : "rooms", legacyExtra: extra && (extra.worlds?.length || extra.characters?.length || extra.personas?.length) ? extra : null });
     void requestPersist();
   } catch (e) {
     setState({ ready: true, storageError: `브라우저 저장소(IndexedDB)를 열 수 없습니다: ${(e as Error)?.message || e}. 이 상태에서는 데이터가 저장되지 않습니다.` });
@@ -192,6 +217,9 @@ export function deleteEntity(id: string) {
       putRoom({ ...r, worldId: r.worldId === id ? undefined : r.worldId, personaId: r.personaId === id ? undefined : r.personaId, characterIds: r.characterIds.filter((c) => c !== id) });
   }
   for (const e of Object.values(state.library)) if (e.kind === "character" && e.worldId === id) putEntity({ ...e, worldId: undefined });
+  for (const n of Object.values(state.novels))
+    if (n.worldId === id || n.personaId === id || n.characterIds.includes(id))
+      putNovel({ ...n, worldId: n.worldId === id ? undefined : n.worldId, personaId: n.personaId === id ? undefined : n.personaId, characterIds: n.characterIds.filter((c) => c !== id) });
   scheduleSave();
 }
 export function upsertLibrary(items: Entity[]) {
@@ -200,7 +228,7 @@ export function upsertLibrary(items: Entity[]) {
 export const entitiesOf = <K extends EntityKind>(lib: Record<string, Entity>, kind: K) =>
   (Object.values(lib).filter((e) => e.kind === kind) as Extract<Entity, { kind: K }>[]).sort((a, b) => a.name.localeCompare(b.name, "ko"));
 
-export function contextFor(room: Room, lib = state.library): StoryContext {
+export function contextFor(room: Pick<Room, "worldId" | "personaId" | "characterIds">, lib = state.library): StoryContext {
   const w = room.worldId ? lib[room.worldId] : undefined;
   const p = room.personaId ? lib[room.personaId] : undefined;
   return {
@@ -212,6 +240,7 @@ export function contextFor(room: Room, lib = state.library): StoryContext {
 
 export function importLegacy(data: LegacyImport, withKeys: boolean) {
   upsertLibrary(data.library);
+  upsertNovels(data.novels);
   data.rooms.forEach((r) => putRoom(r));
   if (withKeys && data.settingsPatch.keys) updateSettings({ keys: { ...state.settings.keys, ...data.settingsPatch.keys }, ...(data.settingsPatch.openaiBaseUrl ? { openaiBaseUrl: data.settingsPatch.openaiBaseUrl } : {}) });
   if (data.rooms[0]) setState({ activeRoomId: data.rooms[0].id });
@@ -344,3 +373,206 @@ export async function updateMemory(roomId: string, mode: "auto" | "manual"): Pro
   }
 }
 export const dismissMemoryError = () => setState({ memoryJob: null });
+
+/* ---------------- 소설 ---------------- */
+export function setView(view: AppState["view"]) {
+  setState({ view });
+  void putKV("view", view);
+}
+function putNovel(n: Novel) {
+  setState((s) => ({ novels: { ...s.novels, [n.id]: n } }));
+  dirty.novels.add(n.id);
+  scheduleSave();
+}
+export function upsertNovels(list: Novel[]) {
+  list.forEach((n) => putNovel(normalizeNovel(n)));
+}
+export function updateNovel(id: string, patch: Partial<Novel>) {
+  const n = state.novels[id];
+  if (n) putNovel(normalizeNovel({ ...n, ...patch, updatedAt: Date.now() }));
+}
+export function createNovel(init: Partial<Novel> = {}): string {
+  const now = Date.now();
+  const n = normalizeNovel({ id: uid("n"), title: "", author: "", genre: "", brief: "", characterIds: [], episodeCount: 10, episodeLength: "medium", outline: [], episodes: [], createdAt: now, updatedAt: now, ...init });
+  putNovel(n);
+  setState({ activeNovelId: n.id, view: "novels" });
+  return n.id;
+}
+export function deleteNovel(id: string) {
+  if (state.novelLive?.novelId === id) stopNovel();
+  setState((s) => {
+    const { [id]: _, ...rest } = s.novels;
+    const next = Object.values(rest).sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    return { novels: rest, activeNovelId: s.activeNovelId === id ? next?.id ?? null : s.activeNovelId };
+  });
+  dirty.novels.delete(id);
+  deleted.novels.add(id);
+  scheduleSave();
+}
+export const selectNovel = (id: string | null) => setState({ activeNovelId: id, view: "novels" });
+/** 이야기방의 설정을 바탕으로 소설 기획 만들기 */
+export function novelFromRoom(roomId: string): string | null {
+  const r = state.rooms[roomId];
+  if (!r) return null;
+  const brief = [r.premise.trim(), r.memory.trim() && `지금까지의 줄거리:\n${r.memory.trim()}`].filter(Boolean).join("\n\n");
+  return createNovel({ title: r.title === "새 이야기" ? "" : r.title, brief, worldId: r.worldId, characterIds: r.characterIds, personaId: r.personaId });
+}
+
+let novelController: AbortController | null = null;
+
+/* 긴 집필 중 화면이 꺼지면 모바일 브라우저가 요청을 끊으므로 화면 켜짐 유지 (지원 브라우저만) */
+type WakeLock = { release: () => Promise<void> };
+let wakeLock: WakeLock | null = null;
+let wakeUsers = 0;
+async function holdWake() {
+  wakeUsers++;
+  try {
+    const wl = (navigator as Navigator & { wakeLock?: { request: (t: "screen") => Promise<WakeLock> } }).wakeLock;
+    if (!wakeLock && wl) wakeLock = await wl.request("screen");
+  } catch {
+    /* 미지원·거부 시 무시 */
+  }
+}
+function releaseWake() {
+  wakeUsers = Math.max(0, wakeUsers - 1);
+  if (!wakeUsers && wakeLock) {
+    void wakeLock.release().catch(() => {});
+    wakeLock = null;
+  }
+}
+// 탭을 다시 보면 잠금이 풀려 있으므로 재요청
+if (typeof document !== "undefined")
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && wakeUsers && !wakeLock) {
+      wakeUsers--;
+      void holdWake();
+    }
+  });
+export const stopNovel = () => novelController?.abort();
+const novelLiveSet = (p: Partial<NovelLive>) => setState((st) => (st.novelLive ? { novelLive: { ...st.novelLive, ...p } } : {}));
+
+/** 개요 생성. from: 이 회차(0부터)부터 다시 짠다 (앞부분 유지) */
+export async function generateOutline(novelId: string, from = 0): Promise<boolean> {
+  const n = state.novels[novelId];
+  if (!n || state.novelLive) return false;
+  from = Math.max(0, Math.min(from, n.outline.length, n.episodeCount - 1));
+  novelController = new AbortController();
+  setState({ novelLive: { novelId, task: "outline", index: from, text: "", thinking: "", status: "", startedAt: Date.now() }, novelError: null });
+  let streamed = "";
+  try {
+    const s = state.settings;
+    const res = await generate({
+      settings: s,
+      ...buildOutlineRequest(s, n, contextFor(n), from),
+      maxTokens: Math.min(16000, 1500 + (n.episodeCount - from) * 250),
+      signal: novelController.signal,
+      onText: (d) => novelLiveSet({ text: (streamed += d), status: "" }),
+      onThinking: (d) => novelLiveSet({ thinking: (state.novelLive?.thinking ?? "") + d }),
+      onStatus: (m) => novelLiveSet({ status: m }),
+    });
+    const items = parseOutline(res.text).filter((x) => x.number > from);
+    if (!items.length) throw new Error("개요 형식을 읽지 못했습니다. 다시 시도해 주세요.");
+    const cur = state.novels[novelId] ?? n;
+    const outline = [...cur.outline.slice(0, from), ...items.slice(0, cur.episodeCount - from).map((x) => ({ id: uid("o"), title: x.title, summary: x.summary }))];
+    updateNovel(novelId, { outline });
+    setState({ lastUsage: res.usage ? { ...res.usage, model: res.model } : null });
+    return true;
+  } catch (e) {
+    if ((e as Error)?.name !== "AbortError") setState({ novelError: { novelId, message: (e as Error)?.message || String(e) } });
+    return false;
+  } finally {
+    novelController = null;
+    setState({ novelLive: null });
+  }
+}
+
+/** 한 회차 집필 (이미 있으면 다시 쓰기). 앞 회차가 비어 있으면 불가 */
+export async function writeEpisode(novelId: string, index: number, note = "", until?: number): Promise<boolean> {
+  const n = state.novels[novelId];
+  if (!n || state.novelLive) return false;
+  if (!n.outline[index]) return setNovelError(novelId, `${index + 1}화의 개요가 없습니다. 먼저 개요를 만들어 주세요.`);
+  if (index > n.episodes.length) return setNovelError(novelId, `${n.episodes.length + 1}화부터 순서대로 써 주세요.`);
+  novelController = new AbortController();
+  setState({ novelLive: { novelId, task: "episode", index, until, text: "", thinking: "", status: "", startedAt: Date.now() }, novelError: null });
+  void holdWake();
+  let streamed = "";
+  const save = (raw: string, model: string, incomplete: boolean) => {
+    const { text, summary } = splitEpisode(raw);
+    const cur = state.novels[novelId];
+    if (!cur || !text) return;
+    const now = Date.now();
+    const old = cur.episodes[index];
+    const ep: Episode = { id: old?.id ?? uid("e"), title: cur.outline[index]?.title ?? `${index + 1}화`, text, summary, model, ...(incomplete ? { incomplete: true } : {}), createdAt: old?.createdAt ?? now, updatedAt: now };
+    const episodes = [...cur.episodes];
+    episodes[index] = ep;
+    updateNovel(novelId, { episodes });
+  };
+  try {
+    const s = state.settings;
+    const ctx = contextFor(n);
+    const groups = [...(ctx.world ? [{ source: ctx.world.name, entries: ctx.world.lore }] : []), ...ctx.characters.map((c) => ({ source: c.name, entries: c.lore }))];
+    const scan = [n.outline[index].title, n.outline[index].summary, n.episodes[index - 1]?.text.slice(-1500) ?? ""].join("\n");
+    const lore = groups.length ? formatLore(matchLore(groups, scan)) : "";
+    const res = await generate({
+      settings: s,
+      ...buildEpisodeRequest(s, n, ctx, index, { lore, note }),
+      maxTokens: EPISODE_LENGTH[n.episodeLength].tokens,
+      signal: novelController.signal,
+      onText: (d) => novelLiveSet({ text: previewEpisode((streamed += d)), status: "" }),
+      onThinking: (d) => novelLiveSet({ thinking: (state.novelLive?.thinking ?? "") + d }),
+      onStatus: (m) => novelLiveSet({ status: m }),
+    });
+    const cut = res.stopReason === "max_tokens" || res.stopReason === "length" || res.stopReason === "MAX_TOKENS";
+    if (!splitEpisode(res.text).text) throw new Error("AI가 빈 원고를 보냈습니다. 다시 시도해 주세요.");
+    save(res.text, res.model, cut);
+    setState({ lastUsage: res.usage ? { ...res.usage, model: res.model } : null });
+    return true;
+  } catch (e) {
+    const err = e as Error;
+    // 중단해도 충분히 쓴 원고는 '미완성'으로 보존
+    if (splitEpisode(streamed).text.length >= 500) save(streamed, "", true);
+    if (err?.name !== "AbortError") setNovelError(novelId, err?.message || String(e));
+    return false;
+  } finally {
+    novelController = null;
+    setState({ novelLive: null });
+    releaseWake();
+  }
+}
+function setNovelError(novelId: string, message: string): false {
+  setState({ novelError: { novelId, message } });
+  return false;
+}
+export const dismissNovelError = () => setState({ novelError: null });
+
+/** 다음 회차부터 until(포함)까지 연속 집필. 중단·오류 시 멈춤 */
+export async function writeEpisodes(novelId: string, until: number): Promise<number> {
+  let done = 0;
+  await holdWake();
+  try {
+    for (;;) {
+      const n = state.novels[novelId];
+      if (!n) break;
+      const next = n.episodes.length;
+      if (next > until || next >= n.outline.length) break;
+      if (!(await writeEpisode(novelId, next, "", until))) break;
+      done++;
+    }
+  } finally {
+    releaseWake();
+  }
+  return done;
+}
+
+/** 회차 직접 수정 · 삭제(마지막 회차만 — 중간을 지우면 이어 쓰기가 어긋남) */
+export function editEpisode(novelId: string, index: number, patch: Partial<Episode>) {
+  const n = state.novels[novelId];
+  if (!n?.episodes[index]) return;
+  const episodes = [...n.episodes];
+  episodes[index] = { ...episodes[index], ...patch, updatedAt: Date.now() };
+  updateNovel(novelId, { episodes });
+}
+export function deleteLastEpisode(novelId: string) {
+  const n = state.novels[novelId];
+  if (n?.episodes.length) updateNovel(novelId, { episodes: n.episodes.slice(0, -1) });
+}

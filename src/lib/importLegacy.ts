@@ -1,11 +1,12 @@
 import { uid } from "./id";
 import { parseKeys } from "./lore";
-import type { Character, Entity, LoreEntry, Message, Persona, Room, Settings, World } from "./types";
+import { normalizeNovel, type Character, type Entity, type Episode, type LoreEntry, type Message, type Novel, type Persona, type Room, type Settings, type World } from "./types";
 
 /** E.No.S Studio 백업 JSON(전체 백업·자동 백업 파일) → 이야기방 + 라이브러리 + (선택) 설정 */
 export interface LegacyImport {
   rooms: Room[];
   library: Entity[];
+  novels: Novel[];
   settingsPatch: Partial<Settings>;
   extra: { worlds: unknown[]; characters: unknown[]; personas: unknown[]; novels: unknown[] };
 }
@@ -45,7 +46,7 @@ export function parseLegacyBackup(json: unknown): LegacyImport {
   const j = (json && typeof json === "object" ? json : {}) as Any;
   const sessions = arr(j.sessions);
   const worldsIn = arr(j.worlds);
-  if (!sessions.length && !worldsIn.length && !j.settings && !arr(j.characters).length) throw new Error("E.No.S 백업 파일 형식이 아닙니다.");
+  if (!sessions.length && !worldsIn.length && !j.settings && !arr(j.characters).length && !arr(j.fullNovels).length) throw new Error("E.No.S 백업 파일 형식이 아닙니다.");
   const now = Date.now();
   const idMap = new Map<string, string>(); // 옛 id → 새 id
   const library: Entity[] = [];
@@ -129,9 +130,37 @@ export function parseLegacyBackup(json: unknown): LegacyImport {
   const settingsPatch: Partial<Settings> = {};
   if (Object.keys(keys).length) settingsPatch.keys = keys as Settings["keys"];
   if (str(os.customBaseUrl)) settingsPatch.openaiBaseUrl = os.customBaseUrl;
+  const novels: Novel[] = arr(j.fullNovels).map((fn, i) => {
+    const eps = arr(fn.episodes).sort((a, b) => (Number(a.episodeNumber) || 0) - (Number(b.episodeNumber) || 0));
+    const t = Number(fn.updatedAt) || Number(fn.createdAt) || now;
+    const body = (e: Any) => str(e.content) || str(e.text) || str(e.body) || str(e.novelContent);
+    const written = eps.filter((e) => body(e).trim());
+    const episodes: Episode[] = [];
+    for (const e of eps) {
+      if (!body(e).trim()) break; // 회차는 앞에서부터 연속으로
+      episodes.push({ id: uid("e"), title: str(e.title) || `${episodes.length + 1}화`, text: body(e).trim(), summary: str(e.summary), createdAt: t, updatedAt: t });
+    }
+    const world = worldsIn.find((w) => w.id === fn.worldId);
+    return normalizeNovel({
+      id: uid("n"),
+      title: str(fn.title).trim() || `가져온 소설 ${i + 1}`,
+      author: str(fn.author),
+      genre: str(fn.genre),
+      brief: str(fn.synopsis) || str(fn.description) || str(fn.prompt),
+      ...(world && idMap.has(str(world.id)) ? { worldId: idMap.get(str(world.id)) } : {}),
+      characterIds: (Array.isArray(fn.characterIds) ? fn.characterIds : []).map((c: unknown) => idMap.get(str(c))).filter((x: string | undefined): x is string => !!x),
+      episodeCount: Math.max(eps.length, written.length, 1),
+      episodeLength: "medium",
+      outline: eps.map((e, k) => ({ id: uid("o"), title: str(e.title) || `${k + 1}화`, summary: str(e.summary) })),
+      episodes,
+      createdAt: Number(fn.createdAt) || t,
+      updatedAt: t,
+    });
+  });
   return {
     rooms,
     library,
+    novels,
     settingsPatch,
     extra: { worlds: worldsIn, characters: arr(j.characters), personas: arr(j.userPersonas), novels: arr(j.fullNovels) },
   };
