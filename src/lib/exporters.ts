@@ -1,3 +1,4 @@
+import { dataUrlToBytes } from "./cover";
 import type { Novel, Room } from "./types";
 
 /* ---------------- ZIP (무압축 STORE, UTF-8 파일명) ---------------- */
@@ -119,7 +120,16 @@ export function novelToEpub(n: Novel, now = new Date()): Uint8Array {
   const uid = `urn:uuid:${uuidFrom(n.id)}`;
   const modified = now.toISOString().replace(/\.\d+Z$/, "Z");
   const chapters = eps.map((e, k) => ({ file: `ch${String(k + 1).padStart(3, "0")}.xhtml`, id: `ch${k + 1}`, heading: clean(episodeHeading(e.i, e.title)), text: e.text }));
-  const css = `body{font-family:serif;line-height:1.8;margin:0 1em;word-break:keep-all}h1{font-size:1.4em;margin:2em 0 1.5em;text-align:center}p{margin:0;text-indent:1em}p+p{margin-top:.6em}.title{text-align:center;margin-top:30%}.title h1{font-size:2em}.title p{text-indent:0;text-align:center}\n`;
+  let cover: { file: string; mime: string; bytes: Uint8Array } | null = null;
+  if (n.cover?.dataUrl) {
+    try {
+      const { mime, bytes } = dataUrlToBytes(n.cover.dataUrl);
+      if (/^image\/(jpeg|png|webp|gif)$/.test(mime)) cover = { file: `cover.${mime === "image/jpeg" ? "jpg" : mime.split("/")[1]}`, mime, bytes };
+    } catch {
+      /* 표지가 깨졌으면 표지 없이 */
+    }
+  }
+  const css = `body{font-family:serif;line-height:1.8;margin:0 1em;word-break:keep-all}h1{font-size:1.4em;margin:2em 0 1.5em;text-align:center}p{margin:0;text-indent:1em}p+p{margin-top:.6em}.title{text-align:center;margin-top:30%}.title h1{font-size:2em}.title p{text-indent:0;text-align:center}.cover{margin:0;padding:0;text-align:center}.cover img{max-width:100%;max-height:100vh}\n`;
   const opf = `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid" xml:lang="ko">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -128,17 +138,17 @@ export function novelToEpub(n: Novel, now = new Date()): Uint8Array {
     <dc:creator>${esc(author)}</dc:creator>
     <dc:language>ko</dc:language>
     ${n.brief.trim() ? `<dc:description>${esc(clean(n.brief.trim()).slice(0, 1000))}</dc:description>` : ""}
-    <meta property="dcterms:modified">${modified}</meta>
+    <meta property="dcterms:modified">${modified}</meta>${cover ? `\n    <meta name="cover" content="cover-image"/>` : ""}
   </metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
     <item id="css" href="style.css" media-type="text/css"/>
-    <item id="title" href="title.xhtml" media-type="application/xhtml+xml"/>
+${cover ? `    <item id="cover-image" href="${cover.file}" media-type="${cover.mime}" properties="cover-image"/>\n    <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>\n` : ""}    <item id="title" href="title.xhtml" media-type="application/xhtml+xml"/>
 ${chapters.map((c) => `    <item id="${c.id}" href="${c.file}" media-type="application/xhtml+xml"/>`).join("\n")}
   </manifest>
   <spine toc="ncx">
-    <itemref idref="title"/>
+${cover ? '    <itemref idref="cover" linear="yes"/>\n' : ""}    <itemref idref="title"/>
 ${chapters.map((c) => `    <itemref idref="${c.id}"/>`).join("\n")}
   </spine>
 </package>
@@ -162,6 +172,7 @@ ${chapters.map((c, k) => `    <navPoint id="np${k + 1}" playOrder="${k + 1}"><na
       { name: "OEBPS/nav.xhtml", data: nav },
       { name: "OEBPS/toc.ncx", data: ncx },
       { name: "OEBPS/style.css", data: css },
+      ...(cover ? [{ name: `OEBPS/${cover.file}`, data: cover.bytes }, { name: "OEBPS/cover.xhtml", data: xhtml(title, `<div class="cover"><img src="${cover.file}" alt="${esc(title)} 표지"/></div>`) }] : []),
       { name: "OEBPS/title.xhtml", data: xhtml(title, `<div class="title"><h1>${esc(title)}</h1><p>${esc(author)}</p></div>`) },
       ...chapters.map((c) => ({ name: `OEBPS/${c.file}`, data: xhtml(c.heading, `<h1>${esc(c.heading)}</h1>\n${paras(c.text)}`) })),
     ],

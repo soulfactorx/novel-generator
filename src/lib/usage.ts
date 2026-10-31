@@ -2,8 +2,8 @@ import { costOf, dayKey, priceFor, type Price } from "./pricing";
 import type { Usage } from "./providers/types";
 import type { ProviderId } from "./types";
 
-export type UsageKind = "chat" | "memory" | "outline" | "episode" | "diagnose" | "test";
-export const KIND_LABEL: Record<UsageKind, string> = { chat: "이야기 대화", memory: "장기 기억 정리", outline: "소설 개요", episode: "소설 집필", diagnose: "진단", test: "연결 테스트" };
+export type UsageKind = "chat" | "memory" | "outline" | "episode" | "diagnose" | "cover" | "test";
+export const KIND_LABEL: Record<UsageKind, string> = { chat: "이야기 대화", memory: "장기 기억 정리", outline: "소설 개요", episode: "소설 집필", diagnose: "진단", cover: "표지 그림", test: "연결 테스트" };
 
 export interface UsageRow {
   n: number; // 호출 수

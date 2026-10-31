@@ -9,6 +9,9 @@ import { buildHistory, buildSystemPrompt, outputTokensFor, type StoryContext } f
 import { generate, ProviderError, type GenerateRequest, type GenerateResult, type Usage } from "./providers";
 import { emptyUsage, recordUsage, type UsageData, type UsageKind } from "./usage";
 import { buildEpisodeDiagnosis, buildRoomDiagnosis, splitDiagnosis } from "./diagnose";
+import { decodePayload, encodePayload } from "./sync/codec";
+import { GistClient, GistError } from "./sync/gist";
+import { mergeSnapshots, type Snapshot } from "./sync/merge";
 import { PROVIDER_LABEL } from "./providers/catalog";
 import { buildEpisodeRequest, buildOutlineRequest, EPISODE_LENGTH, parseOutline, previewEpisode, splitEpisode } from "./novel";
 import { DEFAULT_SETTINGS, type MessageUsage, normalizeNovel, normalizeRoom, normalizeSettings, type Character, type Entity, type EntityKind, type Episode, type Message, type Novel, type Persona, type Room, type Settings, type World } from "./types";
@@ -38,6 +41,28 @@ export interface AppState {
   novelLive: NovelLive | null;
   novelError: { novelId: string; message: string } | null;
   usage: UsageData;
+  sync: SyncStatus;
+}
+export interface SyncStatus {
+  connected: boolean;
+  auto: boolean;
+  encrypted: boolean;
+  running: boolean;
+  login?: string;
+  gistUrl?: string;
+  lastSyncAt?: number;
+  lastResult?: string;
+  error?: string;
+}
+interface SyncConfig {
+  token: string;
+  passphrase: string;
+  auto: boolean;
+  gistId?: string;
+  gistUrl?: string;
+  login?: string;
+  lastSyncAt?: number;
+  device: string;
 }
 export interface NovelLive {
   novelId: string;
@@ -50,12 +75,36 @@ export interface NovelLive {
   startedAt: number;
 }
 
-let state: AppState = { ready: false, storageError: "", settings: DEFAULT_SETTINGS, rooms: {}, library: {}, activeRoomId: null, live: null, memoryJob: null, lastUsage: null, legacyExtra: null, view: "rooms", novels: {}, activeNovelId: null, novelLive: null, novelError: null, usage: emptyUsage() };
+let state: AppState = { ready: false, storageError: "", settings: DEFAULT_SETTINGS, rooms: {}, library: {}, activeRoomId: null, live: null, memoryJob: null, lastUsage: null, legacyExtra: null, view: "rooms", novels: {}, activeNovelId: null, novelLive: null, novelError: null, usage: emptyUsage(), sync: { connected: false, auto: false, encrypted: false, running: false } };
 const subs = new Set<() => void>();
 const dirty = { rooms: new Set<string>(), library: new Set<string>(), novels: new Set<string>() };
 const deleted = { rooms: new Set<string>(), library: new Set<string>(), novels: new Set<string>() };
 let settingsDirty = false;
 let usageDirty = false;
+/* 동기화용: 삭제 기록 · 설정 수정 시각 (kv "syncMeta") */
+let tombstones: Record<string, number> = {};
+let settingsUpdatedAt = 0;
+let syncMetaDirty = false;
+let syncConfig: SyncConfig | null = null;
+let applyingRemote = false;
+let syncTimer: ReturnType<typeof setTimeout> | undefined;
+function markSyncDirty() {
+  if (applyingRemote || !syncConfig?.auto) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => void syncNow(), 45_000);
+}
+function addTombstone(id: string) {
+  tombstones[id] = Date.now();
+  syncMetaDirty = true;
+  markSyncDirty();
+}
+/** 백업 복원 등으로 지웠던 항목을 다시 넣는 경우: 삭제 기록보다 새 것으로 만들어 동기화 때 다시 지워지지 않게 */
+function revive<T extends { id: string; updatedAt: number }>(r: T): T {
+  if (tombstones[r.id] === undefined) return r;
+  delete tombstones[r.id];
+  syncMetaDirty = true;
+  return { ...r, updatedAt: Math.max(r.updatedAt, Date.now()) };
+}
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let controller: AbortController | null = null;
 
@@ -94,12 +143,15 @@ export async function flush() {
   settingsDirty = false;
   const saveUsage = usageDirty;
   usageDirty = false;
+  const saveSyncMeta = syncMetaDirty;
+  syncMetaDirty = false;
   try {
     await putRecords("rooms", rooms.items, delRooms);
     await putRecords("library", lib.items, delLib);
     await putRecords("novels", nov.items, delNov);
     if (saveSettings) await putKV("settings", state.settings);
     if (saveUsage) await putKV("usage", state.usage);
+    if (saveSyncMeta) await putKV("syncMeta", { tombstones, settingsUpdatedAt });
     if (state.storageError) setState({ storageError: "" });
   } catch (e) {
     rooms.ids.forEach((id) => dirty.rooms.add(id));
@@ -110,11 +162,17 @@ export async function flush() {
     delLib.forEach((id) => deleted.library.add(id));
     settingsDirty ||= saveSettings;
     usageDirty ||= saveUsage;
+    syncMetaDirty ||= saveSyncMeta;
     setState({ storageError: `저장 실패: ${(e as Error)?.message || e}` });
     saveTimer = setTimeout(() => void flush(), 3000);
   }
 }
-if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => document.visibilityState === "hidden" && void flush());
+if (typeof document !== "undefined")
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") void flush();
+    // 다른 기기에서 쓰다 돌아온 경우를 위해, 다시 볼 때 2분 이상 지났으면 동기화
+    else if (syncConfig?.auto && Date.now() - (syncConfig.lastSyncAt ?? 0) > 120_000) void syncNow();
+  });
 
 export async function init() {
   try {
@@ -128,23 +186,41 @@ export async function init() {
     library.forEach((e) => (lib[e.id] = e));
     const recent = Object.values(map).sort((a, b) => b.updatedAt - a.updatedAt)[0];
     const extra = (kv.legacyExtra as LegacyImport["extra"]) || null;
+    const sm = kv.syncMeta as { tombstones?: Record<string, number>; settingsUpdatedAt?: number } | undefined;
+    tombstones = { ...(sm?.tombstones ?? {}) };
+    // 동기화 이전부터 쓰던 기기: 저장된 설정이 있으면 기본값(0)보다 우선하도록 1
+    settingsUpdatedAt = sm?.settingsUpdatedAt ?? (kv.settings ? 1 : 0);
+    syncConfig = (kv.sync as SyncConfig) || null;
     setState({ ready: true, settings: normalizeSettings(kv.settings), rooms: map, library: lib, activeRoomId: recent?.id ?? null, novels: nmap, activeNovelId: recentNovel?.id ?? null, view: kv.view === "novels" ? "novels" : "rooms", usage: (kv.usage as UsageData)?.days ? (kv.usage as UsageData) : emptyUsage(), legacyExtra: extra && (extra.worlds?.length || extra.characters?.length || extra.personas?.length) ? extra : null });
+    setSyncStatus();
     void requestPersist();
+    if (syncConfig?.auto) syncTimer = setTimeout(() => void syncNow(), 1500);
   } catch (e) {
     setState({ ready: true, storageError: `브라우저 저장소(IndexedDB)를 열 수 없습니다: ${(e as Error)?.message || e}. 이 상태에서는 데이터가 저장되지 않습니다.` });
   }
 }
 
 /* ---------------- 설정 · 이야기방 ---------------- */
+const syncedSettings = (s: Settings): Partial<Settings> => {
+  const { keys: _k, ...rest } = s; // API 키는 기기마다 따로 (동기화하지 않음)
+  return rest;
+};
 export function updateSettings(patch: Partial<Settings>) {
+  const before = JSON.stringify(syncedSettings(state.settings));
   setState((s) => ({ settings: normalizeSettings({ ...s.settings, ...patch }) }));
   settingsDirty = true;
+  if (JSON.stringify(syncedSettings(state.settings)) !== before) {
+    settingsUpdatedAt = Date.now();
+    syncMetaDirty = true;
+    markSyncDirty();
+  }
   scheduleSave();
 }
 
 function putRoom(room: Room) {
   setState((s) => ({ rooms: { ...s.rooms, [room.id]: room } }));
   dirty.rooms.add(room.id);
+  markSyncDirty();
   scheduleSave();
 }
 export function updateRoom(id: string, patch: Partial<Room>) {
@@ -173,6 +249,7 @@ export function deleteRoom(id: string) {
   });
   dirty.rooms.delete(id);
   deleted.rooms.add(id);
+  addTombstone(id);
   scheduleSave();
 }
 export const selectRoom = (id: string | null) => setState({ activeRoomId: id });
@@ -188,13 +265,14 @@ export function editMessage(roomId: string, msgId: string, text: string) {
 
 /** 백업 복원: 같은 id 는 덮어쓰고 나머지는 추가 */
 export function upsertRooms(rooms: Room[]) {
-  rooms.forEach((r) => putRoom(normalizeRoom(r)));
+  rooms.forEach((r) => putRoom(revive(normalizeRoom(r))));
 }
 
 /* ---------------- 라이브러리 ---------------- */
 export function putEntity(e: Entity) {
   setState((s) => ({ library: { ...s.library, [e.id]: e } }));
   dirty.library.add(e.id);
+  markSyncDirty();
   scheduleSave();
 }
 export function updateEntity<T extends Entity>(id: string, patch: Partial<T>) {
@@ -221,6 +299,7 @@ export function deleteEntity(id: string) {
   });
   dirty.library.delete(id);
   deleted.library.add(id);
+  addTombstone(id);
   for (const r of Object.values(state.rooms)) {
     if (r.worldId === id || r.personaId === id || r.characterIds.includes(id))
       putRoom({ ...r, worldId: r.worldId === id ? undefined : r.worldId, personaId: r.personaId === id ? undefined : r.personaId, characterIds: r.characterIds.filter((c) => c !== id) });
@@ -232,7 +311,7 @@ export function deleteEntity(id: string) {
   scheduleSave();
 }
 export function upsertLibrary(items: Entity[]) {
-  items.forEach(putEntity);
+  items.forEach((e) => putEntity(revive(e)));
 }
 export const entitiesOf = <K extends EntityKind>(lib: Record<string, Entity>, kind: K) =>
   (Object.values(lib).filter((e) => e.kind === kind) as Extract<Entity, { kind: K }>[]).sort((a, b) => a.name.localeCompare(b.name, "ko"));
@@ -437,10 +516,11 @@ export function setView(view: AppState["view"]) {
 function putNovel(n: Novel) {
   setState((s) => ({ novels: { ...s.novels, [n.id]: n } }));
   dirty.novels.add(n.id);
+  markSyncDirty();
   scheduleSave();
 }
 export function upsertNovels(list: Novel[]) {
-  list.forEach((n) => putNovel(normalizeNovel(n)));
+  list.forEach((n) => putNovel(revive(normalizeNovel(n))));
 }
 export function updateNovel(id: string, patch: Partial<Novel>) {
   const n = state.novels[id];
@@ -462,6 +542,7 @@ export function deleteNovel(id: string) {
   });
   dirty.novels.delete(id);
   deleted.novels.add(id);
+  addTombstone(id);
   scheduleSave();
 }
 export const selectNovel = (id: string | null) => setState({ activeNovelId: id, view: "novels" });
@@ -634,6 +715,15 @@ export function resetUsage() {
   scheduleSave();
 }
 
+/** generate 를 거치지 않는 요청(표지 그림 등)의 사용량 기록. 반환: 비용(USD, 모르면 undefined) */
+export function recordExternalUsage(kind: UsageKind, provider: Settings["provider"], model: string, usage: Usage): number | undefined {
+  const { data, usd } = recordUsage(state.usage, { provider, model, kind, usage, custom: state.settings.customPrices });
+  setState({ usage: data });
+  usageDirty = true;
+  scheduleSave();
+  return usd ?? undefined;
+}
+
 /* ---------------- 진단 ---------------- */
 export interface DiagnosisResult {
   report: string;
@@ -713,4 +803,147 @@ export function rewindTo(roomId: string, msgId: string) {
   const point = kept[kept.length - 1];
   const stale = r.memoryCursorAt !== undefined && r.memoryCursorAt > point.createdAt;
   updateRoom(roomId, { messages: kept, ...(stale ? { memory: "", memoryCursorAt: undefined, memoryUpdatedAt: undefined } : {}) });
+}
+
+/* ---------------- 표지 ---------------- */
+export function setCover(novelId: string, cover: Novel["cover"] | null) {
+  const n = state.novels[novelId];
+  if (!n) return;
+  const { cover: _, ...rest } = n;
+  putNovel(normalizeNovel({ ...rest, ...(cover ? { cover } : {}), updatedAt: Date.now() } as Novel));
+}
+
+/* ---------------- 기기 간 동기화 (GitHub Gist) ---------------- */
+function setSyncStatus(p: Partial<SyncStatus> = {}) {
+  const c = syncConfig;
+  setState((st) => ({ sync: { ...st.sync, connected: !!c, auto: !!c?.auto, encrypted: !!c?.passphrase, login: c?.login, gistUrl: c?.gistUrl, lastSyncAt: c?.lastSyncAt, ...p } }));
+}
+async function saveSyncConfig(c: SyncConfig | null) {
+  syncConfig = c;
+  if (c) await putKV("sync", c);
+  else await deleteKV("sync");
+  setSyncStatus();
+}
+function localSnapshot(): Snapshot {
+  return { rooms: state.rooms, library: state.library, novels: state.novels, tombstones, settings: { value: syncedSettings(state.settings), updatedAt: settingsUpdatedAt } };
+}
+
+/** 토큰 확인 → (있으면) 기존 동기화 Gist 찾기 → 바로 동기화 */
+export async function connectSync(opts: { token: string; passphrase: string; auto: boolean }): Promise<boolean> {
+  const token = opts.token.trim();
+  if (!token) return false;
+  setSyncStatus({ running: true, error: undefined });
+  try {
+    const client = new GistClient(token);
+    const login = await client.user();
+    const gistId = (await client.find()) ?? undefined;
+    await saveSyncConfig({ token, passphrase: opts.passphrase, auto: opts.auto, login, gistId, device: navigator.userAgent.slice(0, 80) });
+  } catch (e) {
+    setSyncStatus({ running: false, error: (e as Error)?.message || String(e) });
+    return false;
+  }
+  setSyncStatus({ running: false });
+  return syncNow();
+}
+export async function disconnectSync() {
+  clearTimeout(syncTimer);
+  await saveSyncConfig(null);
+  setSyncStatus({ error: undefined, lastResult: undefined });
+}
+export async function updateSyncOptions(p: { auto?: boolean; passphrase?: string }) {
+  if (syncConfig) await saveSyncConfig({ ...syncConfig, ...p });
+}
+
+let syncRunning = false;
+/**
+ * 원격을 받아 병합 → 이 기기에 반영 → 원격이 달라졌으면 다시 씀.
+ * forcePush: 원격 내용을 무시하고 이 기기 데이터로 덮어씀 (암호를 바꿨거나 잊었을 때)
+ */
+export async function syncNow(opts: { forcePush?: boolean } = {}): Promise<boolean> {
+  const cfg = syncConfig;
+  if (!cfg || syncRunning) return false;
+  if (state.live || state.novelLive) {
+    // 생성 중에는 미룸 (쓰는 중인 이야기를 덮어쓰지 않도록)
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(() => void syncNow(opts), 30_000);
+    return false;
+  }
+  clearTimeout(syncTimer);
+  syncRunning = true;
+  setSyncStatus({ running: true, error: undefined });
+  try {
+    await flush();
+    const client = new GistClient(cfg.token);
+    let id = cfg.gistId ?? null;
+    let remote: Snapshot | null = null;
+    let files: string[] = [];
+    let url = cfg.gistUrl;
+    if (id) {
+      try {
+        const r = await client.read(id);
+        if (r) {
+          files = r.files;
+          url = r.url ?? url;
+          if (!opts.forcePush) remote = await decodePayload<Snapshot>(r.meta.payload, r.body, cfg.passphrase || undefined);
+        }
+      } catch (e) {
+        if (e instanceof GistError && e.status === 404) id = (await client.find()) ?? null; // 지워졌으면 다시 찾고, 없으면 새로 만듦
+        else throw e;
+      }
+    }
+    const m = mergeSnapshots(localSnapshot(), remote);
+    // 이 기기에 반영 (updatedAt 은 그대로 → 다시 '변경'으로 잡히지 않음)
+    applyingRemote = true;
+    try {
+      const L = m.local;
+      if (L.put.rooms.length || L.del.rooms.length || L.put.library.length || L.del.library.length || L.put.novels.length || L.del.novels.length) {
+        setState((st) => {
+          const rooms = { ...st.rooms }, library = { ...st.library }, novels = { ...st.novels };
+          L.put.rooms.forEach((r) => ((rooms[r.id] = normalizeRoom(r)), dirty.rooms.add(r.id)));
+          L.put.library.forEach((e) => ((library[e.id] = e), dirty.library.add(e.id)));
+          L.put.novels.forEach((n) => ((novels[n.id] = normalizeNovel(n)), dirty.novels.add(n.id)));
+          L.del.rooms.forEach((rid) => (delete rooms[rid], deleted.rooms.add(rid)));
+          L.del.library.forEach((lid) => (delete library[lid], deleted.library.add(lid)));
+          L.del.novels.forEach((nid) => (delete novels[nid], deleted.novels.add(nid)));
+          const recent = (o: Record<string, { updatedAt: number; id: string }>) => Object.values(o).sort((a, b) => b.updatedAt - a.updatedAt)[0]?.id ?? null;
+          return {
+            rooms, library, novels,
+            activeRoomId: st.activeRoomId && rooms[st.activeRoomId] ? st.activeRoomId : recent(rooms),
+            activeNovelId: st.activeNovelId && novels[st.activeNovelId] ? st.activeNovelId : recent(novels),
+          };
+        });
+      }
+      if (L.tombstonesChanged) {
+        tombstones = { ...m.merged.tombstones };
+        syncMetaDirty = true;
+      }
+      if (L.settings && m.merged.settings) {
+        setState((st) => ({ settings: normalizeSettings({ ...L.settings, keys: st.settings.keys }) }));
+        settingsUpdatedAt = m.merged.settings.updatedAt;
+        settingsDirty = true;
+        syncMetaDirty = true;
+      }
+    } finally {
+      applyingRemote = false;
+    }
+    let wrote = false;
+    if (m.remoteChanged || !id || opts.forcePush) {
+      const { meta, body } = await encodePayload(m.merged, cfg.passphrase || undefined);
+      const w = await client.write(id, { app: "novel-generator", payload: meta, updatedAt: Date.now(), device: cfg.device }, body, files);
+      id = w.id;
+      url = w.url ?? url;
+      wrote = true;
+    }
+    const got = m.local.put.rooms.length + m.local.put.library.length + m.local.put.novels.length;
+    const removed = m.local.del.rooms.length + m.local.del.library.length + m.local.del.novels.length;
+    if (syncConfig) await saveSyncConfig({ ...syncConfig, gistId: id ?? undefined, gistUrl: url, lastSyncAt: Date.now() }); // 도중에 연결 해제했으면 되살리지 않음
+    setSyncStatus({ running: false, lastResult: [got && `받음 ${got}`, removed && `삭제 ${removed}`, wrote ? "올림" : "변경 없음"].filter(Boolean).join(" · ") });
+    await flush();
+    return true;
+  } catch (e) {
+    setSyncStatus({ running: false, error: (e as Error)?.message || String(e) });
+    return false;
+  } finally {
+    syncRunning = false;
+  }
 }

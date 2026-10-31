@@ -9,6 +9,8 @@ import { getState, importLegacy, importLegacyExtra, updateSettings, upsertLibrar
 import type { ContentRating, ProviderId, Room, Settings, StyleOptions } from "../lib/types";
 import Dialog from "./Dialog";
 import UsageTab from "./UsageTab";
+import SyncSection from "./SyncSection";
+import InstallSection from "./InstallSection";
 import { hasKeyFor } from "../lib/store";
 
 const TABS = [["ai", "AI 연결"], ["writing", "글쓰기"], ["rating", "콘텐츠 수위"], ["usage", "사용량·비용"], ["data", "데이터"]] as const;
@@ -241,6 +243,8 @@ function DataTab() {
   };
   return (
     <div className="space-y-4">
+      <SyncSection />
+      <InstallSection />
       <div className="card space-y-2">
         <div className="font-bold">💾 백업 내려받기</div>
         <p className="hint">모든 이야기, 소설, 세계관·인물, 설정을 JSON 파일로 저장합니다. 데이터는 이 브라우저에만 있으니 가끔 백업해 두세요.</p>

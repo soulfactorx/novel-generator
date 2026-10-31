@@ -31,6 +31,7 @@ export interface Settings {
   monthlyBudget: number; // USD, 0 = 끔 (넘으면 경고만)
   krwPerUsd: number; // 원화 환산 표시용
   customPrices: Record<string, { in: number; out: number }>; // 모델별 사용자 지정 단가 (USD/100만 토큰)
+  coverModel: string; // AI 표지 그림 모델 (Gemini)
 }
 
 /** 메시지·회차에 붙는 사용량 (usd: 단가를 아는 경우) */
@@ -136,6 +137,7 @@ export const DEFAULT_SETTINGS: Settings = {
   monthlyBudget: 0,
   krwPerUsd: 1400,
   customPrices: {},
+  coverModel: "gemini-nano-banana-2.1",
 };
 
 /** 저장된 설정을 기본값과 병합 (새 항목이 추가돼도 안전) */
@@ -162,6 +164,12 @@ export function normalizeSettings(raw: unknown): Settings {
 }
 
 /* ---------------- 소설 (자동 집필 · 서고) ---------------- */
+export interface NovelCover {
+  dataUrl: string; // JPEG data URL (약 800×1200)
+  source: "ai" | "upload" | "design";
+  prompt?: string;
+  createdAt: number;
+}
 export type EpisodeLength = "short" | "medium" | "long";
 export interface OutlineItem {
   id: string;
@@ -192,6 +200,7 @@ export interface Novel {
   episodeLength: EpisodeLength;
   outline: OutlineItem[]; // outline[i] ↔ episodes[i]
   episodes: Episode[];
+  cover?: NovelCover;
   createdAt: number;
   updatedAt: number;
 }

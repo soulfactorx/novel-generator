@@ -104,3 +104,11 @@ test("usage tab renders recorded usage; fallback section shows key warning", asy
   await wait();
   expect(document.body.textContent).toContain("API 키가 없어 대체 모델을 쓸 수 없습니다");
 });
+
+test("data tab shows sync and install sections", async () => {
+  await act(async () => (document.querySelector('[aria-label="닫기"]') as HTMLButtonElement | null)?.click());
+  await act(async () => byText("📦 데이터")!.click());
+  expect(document.body.textContent).toContain("기기 간 동기화 (GitHub Gist)");
+  expect(document.body.textContent).toContain("앱으로 설치");
+  expect((byText("연결하고 동기화") as HTMLButtonElement).disabled).toBe(true); // 토큰 없으면 비활성
+});

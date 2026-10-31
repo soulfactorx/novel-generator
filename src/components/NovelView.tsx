@@ -7,6 +7,7 @@ import { formatUsd } from "../lib/pricing";
 import { deleteLastEpisode, diagnoseEpisode, dismissNovelError, getState, editEpisode, generateOutline, stopNovel, updateNovel, updateSettings, useApp, writeEpisode, writeEpisodes } from "../lib/store";
 import type { EpisodeLength, Novel } from "../lib/types";
 import CastPicker from "./CastPicker";
+import CoverPanel from "./CoverPanel";
 import { StoryText } from "./Message";
 
 type Tab = "plan" | "outline" | "manuscript";
@@ -119,6 +120,7 @@ function PlanTab({ novel: n, onOpenLibrary, onNext }: { novel: Novel; onOpenLibr
         </F>
       </div>
       <p className="hint">문체(시점·전개 속도·대사 비중)와 콘텐츠 수위는 [⚙️ 설정]의 값을 따릅니다.</p>
+      <CoverPanel novel={n} />
       <button className="btn-primary" onClick={onNext}>다음: 개요 →</button>
     </div>
   );

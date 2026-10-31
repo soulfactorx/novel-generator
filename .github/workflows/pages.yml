@@ -1,7 +1,8 @@
 name: Pages
 
-# 최신 GitHub Release 의 HTML 을 GitHub Pages 에 배포합니다.
-# github-pages 환경은 기본 브랜치에서만 배포를 허용하므로, 태그가 아닌 main 기준으로 실행합니다.
+# 최신 GitHub Release 태그의 소스를 빌드해 GitHub Pages 에 배포합니다.
+# (단일 HTML + 앱 설치용 manifest·서비스 워커·아이콘)
+# github-pages 환경은 기본 브랜치에서만 배포를 허용하므로 main 기준으로 실행하고, 소스는 릴리스 태그를 체크아웃합니다.
 on:
   workflow_run:
     workflows: [Release]
@@ -24,21 +25,34 @@ jobs:
   deploy:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - name: Download latest release asset
+      - name: Find latest release tag
+        id: tag
         env:
           GH_TOKEN: ${{ github.token }}
+        run: echo "tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Check bundle
         run: |
-          mkdir -p pages
-          gh release download --repo "$GITHUB_REPOSITORY" --pattern 'novel-generator-v*.html' --dir dl
-          cp dl/novel-generator-v*.html pages/index.html
-          ls -la pages
+          test -f dist/index.html
+          for f in sw.js manifest.webmanifest icons/icon-512.png; do
+            test -f "dist/$f" || echo "::warning::dist/$f 없음 (v0.5 이전 릴리스이면 정상)"
+          done
+          ls -la dist
       - uses: actions/upload-pages-artifact@v5
         with:
-          path: pages
+          path: dist
       - id: deploy
         uses: actions/deploy-pages@v5

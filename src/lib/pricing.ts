@@ -39,6 +39,9 @@ const GEMINI: Record<string, Schedule> = {
   "gemini-3.6-flash": [G(0.75, 3.75, 0.075, "2026-12-31"), G(1.5, 7.5, 0.15)],
   "gemini-3.5-flash-lite": [G(0.3, 2.5, 0.03)],
   "gemini-3.1-flash-lite": [G(0.25, 1.5, 0.025)],
+  // 이미지 모델: 출력(이미지) $30/100만 토큰 ≈ 1K 이미지 1장 $0.0336
+  "gemini-nano-banana-2.1": [G(1.5, 30, 1.5)],
+  "gemini-3.1-flash-lite-image": [G(0.25, 30, 0.25)],
 };
 
 export const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;

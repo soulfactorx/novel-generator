@@ -1,5 +1,6 @@
 import { charCount } from "../lib/novel";
-import { createNovel, deleteNovel, deleteRoom, selectNovel, selectRoom, setView, useApp } from "../lib/store";
+import { promptInstall, usePwa } from "../lib/pwa";
+import { syncNow, createNovel, deleteNovel, deleteRoom, selectNovel, selectRoom, setView, useApp } from "../lib/store";
 
 export default function Sidebar({ open, onClose, onOpenSettings, onNewStory, onOpenLibrary }: { open: boolean; onClose: () => void; onOpenSettings: (tab?: string) => void; onNewStory: () => void; onOpenLibrary: () => void }) {
   const rooms = useApp((s) => s.rooms);
@@ -8,6 +9,8 @@ export default function Sidebar({ open, onClose, onOpenSettings, onNewStory, onO
   const novels = useApp((s) => s.novels);
   const activeNovel = useApp((s) => s.activeNovelId);
   const writing = useApp((s) => s.novelLive?.novelId);
+  const pwa = usePwa();
+  const sync = useApp((s) => s.sync);
   const novelList = Object.values(novels).sort((a, b) => b.updatedAt - a.updatedAt);
   const active = useApp((s) => s.activeRoomId);
   const list = Object.values(rooms).sort((a, b) => b.updatedAt - a.updatedAt);
@@ -32,6 +35,7 @@ export default function Sidebar({ open, onClose, onOpenSettings, onNewStory, onO
             {novelList.length === 0 && <p className="hint px-2 py-4">아직 소설이 없습니다. [+ 새 소설]로 기획부터 시작하세요.</p>}
             {novelList.map((n) => (
               <div key={n.id} className={`group flex items-center rounded-lg ${n.id === activeNovel ? "bg-violet-100 dark:bg-violet-950/60" : "hover:bg-stone-200/70 dark:hover:bg-stone-800"}`}>
+                {n.cover && <img src={n.cover.dataUrl} alt="" className="ml-2 h-12 w-8 shrink-0 rounded-sm object-cover shadow-sm" />}
                 <button className="min-w-0 flex-1 px-3 py-2 text-left" onClick={() => { selectNovel(n.id); onClose(); }}>
                   <div className="truncate text-sm font-semibold">{writing === n.id && "✒️ "}{n.title || "제목 없는 소설"}</div>
                   <div className="truncate text-xs text-stone-500">{n.episodes.length}/{n.episodeCount}화 · {n.episodes.reduce((a, e) => a + charCount(e.text), 0).toLocaleString()}자 · {new Date(n.updatedAt).toLocaleDateString("ko-KR")}</div>
@@ -53,6 +57,17 @@ export default function Sidebar({ open, onClose, onOpenSettings, onNewStory, onO
             </div>
           ))}
         </nav>
+        )}
+        {(pwa.canInstall || sync.connected || !pwa.online) && (
+          <div className="flex items-center gap-2 border-t border-stone-200 px-3 py-1.5 text-xs dark:border-stone-800">
+            {!pwa.online && <span className="text-amber-600" title="인터넷 연결 없음 — 글 생성·동기화는 연결 후에">● 오프라인</span>}
+            {sync.connected && (
+              <button className={`truncate ${sync.error ? "text-rose-600" : "text-stone-500"}`} onClick={() => (sync.error ? onOpenSettings("data") : void syncNow())} title={sync.error || "지금 동기화"}>
+                {sync.running ? "🔄 동기화 중…" : sync.error ? "⚠️ 동기화 오류" : `🔄 ${sync.lastSyncAt ? new Date(sync.lastSyncAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }) + " 동기화됨" : "동기화"}`}
+              </button>
+            )}
+            {pwa.canInstall && <button className="ml-auto font-semibold text-violet-600" onClick={() => void promptInstall()}>📲 앱 설치</button>}
+          </div>
         )}
         <div className="flex gap-1 border-t border-stone-200 p-2 dark:border-stone-800">
           <button className="btn-ghost flex-1 px-1" onClick={() => { onOpenLibrary(); onClose(); }}>📚 라이브러리</button>
