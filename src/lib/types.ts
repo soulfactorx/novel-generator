@@ -24,6 +24,7 @@ export interface Settings {
   adultConfirmed: boolean; // 성인 확인을 직접 했는지
   style: StyleOptions;
   theme: "system" | "light" | "dark";
+  autoMemory: boolean; // 오래된 대화를 장기 기억으로 자동 정리
 }
 
 export type Role = "user" | "assistant";
@@ -42,11 +43,58 @@ export interface Message {
 export interface Room {
   id: string;
   title: string;
-  premise: string; // 배경·설정 메모 (시스템 프롬프트에 포함)
+  premise: string; // 이 이야기만의 추가 설정 메모 (시스템 프롬프트에 포함)
   memory: string; // 장기 기억 요약
   messages: Message[];
   createdAt: number;
   updatedAt: number;
+  worldId?: string;
+  characterIds: string[];
+  personaId?: string;
+  memoryCursorAt?: number; // 이 시각(createdAt) 이전 메시지까지 장기 기억에 반영됨
+  memoryUpdatedAt?: number;
+}
+
+/* ---------------- 라이브러리: 세계관 · 등장인물 · 주인공(페르소나) ---------------- */
+
+/** 로어북 항목: 키워드가 최근 대화에 나오면(또는 '항상') AI에게 전달 */
+export interface LoreEntry {
+  id: string;
+  title: string;
+  keys: string[];
+  content: string;
+  enabled: boolean;
+  always?: boolean;
+}
+interface EntityBase {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+}
+export interface World extends EntityBase {
+  kind: "world";
+  description: string; // 배경·시대·분위기
+  rules: string; // 이 세계에서 지켜야 할 규칙·문체 지시
+  lore: LoreEntry[];
+}
+export interface Character extends EntityBase {
+  kind: "character";
+  summary: string; // 한 줄 소개 (나이·직업 등)
+  profile: string; // 외모·성격·배경·관계
+  speech: string; // 말투·대사 예시
+  lore: LoreEntry[];
+  worldId?: string; // 소속 세계관 (선택)
+}
+export interface Persona extends EntityBase {
+  kind: "persona";
+  profile: string; // 사용자가 연기하는 주인공
+}
+export type Entity = World | Character | Persona;
+export type EntityKind = Entity["kind"];
+
+export function normalizeRoom(raw: Room): Room {
+  return { ...raw, premise: raw.premise ?? "", memory: raw.memory ?? "", messages: raw.messages ?? [], characterIds: Array.isArray(raw.characterIds) ? raw.characterIds : [] };
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -63,6 +111,7 @@ export const DEFAULT_SETTINGS: Settings = {
   adultConfirmed: false,
   style: { pov: "third-limited", length: "medium", pacing: "balanced", dialogue: "balanced" },
   theme: "system",
+  autoMemory: true,
 };
 
 /** 저장된 설정을 기본값과 병합 (새 항목이 추가돼도 안전) */

@@ -1,11 +1,11 @@
 import { useRef, useState, type ReactNode } from "react";
-import { download, isOwnBackup, makeBackup } from "../lib/backup";
+import { backupLibrary, download, isOwnBackup, makeBackup } from "../lib/backup";
 import { parseLegacyBackup, type LegacyImport } from "../lib/importLegacy";
 import { listModels } from "../lib/modelList";
 import { testConnection } from "../lib/providers";
 import { CLAUDE_MODELS, GEMINI_MODELS, OPENAI_PRESETS, PROVIDER_LABEL } from "../lib/providers/catalog";
 import { RATING_POLICY } from "../lib/prompt";
-import { getState, importLegacy, updateSettings, upsertRooms, useApp } from "../lib/store";
+import { getState, importLegacy, importLegacyExtra, updateSettings, upsertLibrary, upsertRooms, useApp } from "../lib/store";
 import type { ContentRating, ProviderId, Room, Settings, StyleOptions } from "../lib/types";
 import Dialog from "./Dialog";
 
@@ -140,11 +140,12 @@ function WritingTab() {
       <Field label="전개 속도"><Choice value={s.style.pacing} onChange={(pacing) => st({ pacing })} options={[["fast", "빠르게"], ["balanced", "균형"], ["slow", "천천히·섬세하게"]]} /></Field>
       <Field label="대사 비중"><Choice value={s.style.dialogue} onChange={(dialogue) => st({ dialogue })} options={[["more", "대화 많이"], ["balanced", "균형"], ["less", "서술 위주"]]} /></Field>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={s.choices} onChange={(e) => updateSettings({ choices: e.target.checked })} /> 응답 끝에 다음 행동 선택지 4개 제안</label>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={s.autoMemory} onChange={(e) => updateSettings({ autoMemory: e.target.checked })} /> 장기 기억 자동 정리 (오래된 대화를 요약해 기억에 반영)</label>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={s.streaming} onChange={(e) => updateSettings({ streaming: e.target.checked })} /> 실시간 스트리밍 (쓰는 동안 바로 보기)</label>
       <Field label={`창의성 (temperature) ${s.temperature.toFixed(2)}`} hint="최신 Claude 모델처럼 이 값을 받지 않는 모델에서는 자동으로 제외됩니다.">
         <input type="range" min={0} max={1} step={0.05} value={s.temperature} onChange={(e) => updateSettings({ temperature: Number(e.target.value) })} className="w-full accent-violet-600" />
       </Field>
-      <Field label={`AI에게 보내는 최근 메시지 수: ${s.contextMessages}`} hint="많을수록 앞 내용을 잘 기억하지만 비용이 늘어납니다.">
+      <Field label={`AI에게 보내는 최근 메시지 수: ${s.contextMessages}`} hint="많을수록 앞 내용을 잘 기억하지만 비용이 늘어납니다. 이보다 오래된 대화는 장기 기억으로 정리됩니다.">
         <input type="range" min={10} max={200} step={10} value={s.contextMessages} onChange={(e) => updateSettings({ contextMessages: Number(e.target.value) })} className="w-full accent-violet-600" />
       </Field>
       <Field label="화면 테마"><Choice value={s.theme} onChange={(theme) => updateSettings({ theme })} options={[["system", "시스템"], ["light", "밝게"], ["dark", "어둡게"]]} /></Field>
@@ -183,6 +184,8 @@ function RatingTab() {
 
 function DataTab() {
   const rooms = useApp((x) => x.rooms);
+  const library = useApp((x) => x.library);
+  const legacyExtra = useApp((x) => x.legacyExtra);
   const settings = useApp((x) => x.settings);
   const fileRef = useRef<HTMLInputElement>(null);
   const [withKeys, setWithKeys] = useState(false);
@@ -193,9 +196,11 @@ function DataTab() {
     try {
       const j = JSON.parse(await f.text());
       if (isOwnBackup(j)) {
+        const lib = backupLibrary(j);
+        upsertLibrary(lib);
         upsertRooms(j.rooms as Room[]);
         if (j.settings) updateSettings({ ...(j.settings as Partial<Settings>), keys: { ...settings.keys, ...Object.fromEntries(Object.entries((j.settings as Settings).keys || {}).filter(([, v]) => v)) } });
-        setMsg({ ok: true, text: `✅ 백업에서 이야기 ${j.rooms.length}개를 복원했습니다.` });
+        setMsg({ ok: true, text: `✅ 백업에서 이야기 ${j.rooms.length}개${lib.length ? `, 라이브러리 항목 ${lib.length}개` : ""}를 복원했습니다.` });
       } else setPending(parseLegacyBackup(j));
     } catch (e) {
       setMsg({ ok: false, text: `❌ ${(e as Error).message}` });
@@ -205,9 +210,9 @@ function DataTab() {
     <div className="space-y-4">
       <div className="card space-y-2">
         <div className="font-bold">💾 백업 내려받기</div>
-        <p className="hint">모든 이야기와 설정을 JSON 파일로 저장합니다. 데이터는 이 브라우저에만 있으니 가끔 백업해 두세요.</p>
+        <p className="hint">모든 이야기, 세계관·인물, 설정을 JSON 파일로 저장합니다. 데이터는 이 브라우저에만 있으니 가끔 백업해 두세요.</p>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={withKeys} onChange={(e) => setWithKeys(e.target.checked)} /> API 키 포함 (파일 보관에 주의)</label>
-        <button className="btn-primary" onClick={() => download(`novel-generator-backup-${new Date().toISOString().slice(0, 10)}.json`, makeBackup(settings, Object.values(rooms), withKeys))}>백업 파일 저장</button>
+        <button className="btn-primary" onClick={() => download(`novel-generator-backup-${new Date().toISOString().slice(0, 10)}.json`, makeBackup(settings, Object.values(rooms), Object.values(library), withKeys))}>백업 파일 저장</button>
       </div>
       <div className="card space-y-2">
         <div className="font-bold">📥 백업 가져오기</div>
@@ -216,12 +221,18 @@ function DataTab() {
         <button className="btn-ghost border border-stone-300 dark:border-stone-700" onClick={() => fileRef.current?.click()}>파일 선택</button>
         {pending && (
           <div className="space-y-2 rounded-lg bg-violet-50 p-3 text-sm dark:bg-violet-950/40">
-            <div>E.No.S 백업: 이야기 <b>{pending.rooms.length}</b>개 (세계관 {pending.extra.worlds.length} · 캐릭터 {pending.extra.characters.length}개는 보관해 두었다가 다음 버전의 관리 기능에서 사용)</div>
+            <div>E.No.S 백업: 이야기 <b>{pending.rooms.length}</b>개 · 세계관 <b>{pending.library.filter((e) => e.kind === "world").length}</b>개 · 등장인물 <b>{pending.library.filter((e) => e.kind === "character").length}</b>명 · 주인공 <b>{pending.library.filter((e) => e.kind === "persona").length}</b>명</div>
             {pending.settingsPatch.keys && <label className="flex items-center gap-2"><input type="checkbox" checked={importKeys} onChange={(e) => setImportKeys(e.target.checked)} /> 백업에 있는 API 키도 가져오기</label>}
             <div className="flex gap-2">
               <button className="btn-primary" onClick={() => { importLegacy(pending, importKeys); setMsg({ ok: true, text: `✅ 이야기 ${pending.rooms.length}개를 가져왔습니다.` }); setPending(null); }}>가져오기</button>
               <button className="btn-ghost" onClick={() => setPending(null)}>취소</button>
             </div>
+          </div>
+        )}
+        {legacyExtra && (
+          <div className="space-y-2 rounded-lg bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
+            <div>이전 버전에서 가져올 때 보관해 둔 E.No.S 세계관·캐릭터가 있습니다.</div>
+            <button className="btn-primary" onClick={() => setMsg({ ok: true, text: `✅ 라이브러리에 ${importLegacyExtra()}개 항목을 추가했습니다.` })}>라이브러리로 가져오기</button>
           </div>
         )}
         {msg && <p className={`text-sm font-semibold ${msg.ok ? "text-emerald-600" : "text-rose-600"}`}>{msg.text}</p>}

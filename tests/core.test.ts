@@ -5,8 +5,9 @@ import { buildHistory, buildSystemPrompt, RATING_POLICY } from "../src/lib/promp
 import { DEFAULT_SETTINGS, normalizeSettings, type Room } from "../src/lib/types";
 import { parseLegacyBackup } from "../src/lib/importLegacy";
 import { apiRoot } from "../src/lib/providers/openai";
+import { backupLibrary, isOwnBackup, makeBackup } from "../src/lib/backup";
 
-const room = (over: Partial<Room> = {}): Room => ({ id: "r", title: "t", premise: "", memory: "", messages: [], createdAt: 0, updatedAt: 0, ...over });
+const room = (over: Partial<Room> = {}): Room => ({ id: "r", title: "t", premise: "", memory: "", messages: [], createdAt: 0, updatedAt: 0, characterIds: [], ...over });
 
 describe("SSE", () => {
   test("CRLF split across chunks + multibyte split", async () => {
@@ -62,7 +63,7 @@ describe("settings & content rating", () => {
 });
 
 describe("E.No.S backup import", () => {
-  test("sessions → rooms, premise from world, keys only if plaintext", () => {
+  test("sessions → rooms linked to imported world/characters, keys only if plaintext", () => {
     const r = parseLegacyBackup({
       worlds: [{ id: "w", name: "항구", description: "비 오는 도시", characterIds: ["c"] }],
       characters: [{ id: "c", name: "서율", job: "상무", personality_tags: "차가움" }],
@@ -72,7 +73,10 @@ describe("E.No.S backup import", () => {
     expect(r.rooms).toHaveLength(1);
     expect(r.rooms[0].messages.map((m) => m.role)).toEqual(["user", "assistant"]);
     expect(r.rooms[0].messages[1].choices).toEqual(["a", "b"]);
-    expect(r.rooms[0].premise).toContain("서율 (상무 · 차가움)");
+    const w = r.library.find((e) => e.kind === "world")!;
+    const ch = r.library.find((e) => e.kind === "character")!;
+    expect(r.rooms[0]).toMatchObject({ worldId: w.id, characterIds: [ch.id] });
+    expect(ch).toMatchObject({ name: "서율", summary: "상무" });
     expect(r.rooms[0].memory).toBe("요약");
     expect(r.settingsPatch.keys).toEqual({ gemini: "g-key" });
     expect(() => parseLegacyBackup({ foo: 1 })).toThrow();
@@ -83,4 +87,13 @@ test("OpenAI-compatible endpoint roots", () => {
   expect(apiRoot("https://openrouter.ai/api/v1")).toBe("https://openrouter.ai/api/v1");
   expect(apiRoot("http://localhost:11434")).toBe("http://localhost:11434/v1");
   expect(apiRoot("https://x.ai/v1/chat/completions")).toBe("https://x.ai/v1");
+});
+
+test("backup format 2 carries library; keys stripped unless requested; v1 backups still accepted", () => {
+  const w = { kind: "world" as const, id: "w", name: "레인포트", description: "", rules: "", lore: [], createdAt: 0, updatedAt: 0 };
+  const b = makeBackup({ ...DEFAULT_SETTINGS, keys: { gemini: "g", anthropic: "a", openai: "" } }, [room()], [w], false);
+  expect(b.settings.keys.gemini).toBe("");
+  expect(isOwnBackup(b) && backupLibrary(b)).toEqual([w]);
+  const v1 = { app: "novel-generator", format: 1, settings: DEFAULT_SETTINGS, rooms: [] };
+  expect(isOwnBackup(v1) && backupLibrary(v1 as any)).toEqual([]);
 });

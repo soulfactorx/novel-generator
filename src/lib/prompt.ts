@@ -1,4 +1,4 @@
-import type { ContentRating, Room, Settings, StyleOptions } from "./types";
+import type { Character, ContentRating, Persona, Room, Settings, StyleOptions, World } from "./types";
 import { CHOICE_MARKER } from "./choices";
 
 /** 수위별 지침. 성인 단계도 각 AI 제공업체의 이용 정책 범위 안에서만 동작합니다. */
@@ -35,7 +35,14 @@ const DIALOGUE: Record<StyleOptions["dialogue"], string> = {
 /** 출력 토큰 상한 (분량 기준, 한국어 여유 포함) */
 export const outputTokensFor = (s: Settings) => LENGTH[s.style.length][1];
 
-export function buildSystemPrompt(s: Settings, room: Room): string {
+/** 이야기방에 연결된 라이브러리 항목 */
+export interface StoryContext {
+  world?: World;
+  characters: Character[];
+  persona?: Persona;
+}
+
+export function buildSystemPrompt(s: Settings, room: Room, ctx: StoryContext = { characters: [] }): string {
   const parts = [
     "너는 사용자와 함께 이야기를 만들어 가는 소설가다. 사용자의 입력은 주인공의 행동·대사이거나 이야기 전개에 대한 요청이다.",
     "",
@@ -57,7 +64,26 @@ export function buildSystemPrompt(s: Settings, room: Room): string {
       `본문을 마친 뒤 빈 줄을 두고 "${CHOICE_MARKER}" 한 줄을 쓴 다음, 주인공이 할 수 있는 서로 다른 다음 행동 4가지를 "1. "부터 번호를 붙여 한 줄씩 짧게 제시한다.`,
     );
   }
-  if (room.premise.trim()) parts.push("", "## 이야기 설정", room.premise.trim());
+  const w = ctx.world;
+  if (w) {
+    parts.push("", `## 세계관: ${w.name}`);
+    if (w.description.trim()) parts.push(w.description.trim());
+    if (w.rules.trim()) parts.push("", "### 이 세계의 규칙", w.rules.trim());
+  }
+  if (ctx.persona) {
+    parts.push("", `## 주인공 (사용자가 연기하는 인물): ${ctx.persona.name}`);
+    if (ctx.persona.profile.trim()) parts.push(ctx.persona.profile.trim());
+    parts.push("주인공의 행동·대사·속마음은 사용자가 정한다. 사용자가 쓰지 않은 주인공의 대사를 지어내지 않는다.");
+  }
+  if (ctx.characters.length) {
+    parts.push("", "## 등장인물");
+    for (const c of ctx.characters) {
+      parts.push("", `### ${c.name}${c.summary.trim() ? ` — ${c.summary.trim()}` : ""}`);
+      if (c.profile.trim()) parts.push(c.profile.trim());
+      if (c.speech.trim()) parts.push("말투 예시:", c.speech.trim());
+    }
+  }
+  if (room.premise.trim()) parts.push("", ctx.world || ctx.characters.length ? "## 이 이야기의 추가 설정" : "## 이야기 설정", room.premise.trim());
   if (room.memory.trim()) parts.push("", "## 지금까지의 줄거리 요약 (참고용, 문장을 그대로 반복하지 말 것)", room.memory.trim());
   return parts.join("\n");
 }

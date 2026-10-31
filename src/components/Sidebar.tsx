@@ -1,7 +1,8 @@
-import { createRoom, deleteRoom, selectRoom, useApp } from "../lib/store";
+import { deleteRoom, selectRoom, useApp } from "../lib/store";
 
-export default function Sidebar({ open, onClose, onOpenSettings }: { open: boolean; onClose: () => void; onOpenSettings: (tab?: string) => void }) {
+export default function Sidebar({ open, onClose, onOpenSettings, onNewStory, onOpenLibrary }: { open: boolean; onClose: () => void; onOpenSettings: (tab?: string) => void; onNewStory: () => void; onOpenLibrary: () => void }) {
   const rooms = useApp((s) => s.rooms);
+  const lib = useApp((s) => s.library);
   const active = useApp((s) => s.activeRoomId);
   const list = Object.values(rooms).sort((a, b) => b.updatedAt - a.updatedAt);
   return (
@@ -13,7 +14,7 @@ export default function Sidebar({ open, onClose, onOpenSettings }: { open: boole
           <button className="btn-ghost px-2 md:hidden" onClick={onClose} aria-label="메뉴 닫기">✕</button>
         </div>
         <div className="px-3">
-          <button className="btn-primary w-full" onClick={() => { createRoom(); onClose(); }}>+ 새 이야기</button>
+          <button className="btn-primary w-full" onClick={() => { onNewStory(); onClose(); }}>+ 새 이야기</button>
         </div>
         <nav className="mt-3 flex-1 space-y-1 overflow-y-auto px-2">
           {list.length === 0 && <p className="hint px-2 py-4">아직 이야기가 없습니다. 새 이야기를 시작하거나 [데이터]에서 기존 백업을 가져오세요.</p>}
@@ -21,15 +22,16 @@ export default function Sidebar({ open, onClose, onOpenSettings }: { open: boole
             <div key={r.id} className={`group flex items-center rounded-lg ${r.id === active ? "bg-violet-100 dark:bg-violet-950/60" : "hover:bg-stone-200/70 dark:hover:bg-stone-800"}`}>
               <button className="min-w-0 flex-1 px-3 py-2 text-left" onClick={() => { selectRoom(r.id); onClose(); }}>
                 <div className="truncate text-sm font-semibold">{r.title}</div>
-                <div className="truncate text-xs text-stone-500">{r.messages.length}개 메시지 · {new Date(r.updatedAt).toLocaleDateString("ko-KR")}</div>
+                <div className="truncate text-xs text-stone-500">{r.worldId && lib[r.worldId] ? `🌍 ${lib[r.worldId].name} · ` : ""}{r.messages.length}개 메시지 · {new Date(r.updatedAt).toLocaleDateString("ko-KR")}</div>
               </button>
               <button className="btn-danger mr-1 px-2 opacity-60 group-hover:opacity-100" title="이야기 삭제" onClick={() => confirm(`'${r.title}' 이야기를 삭제할까요? 되돌릴 수 없습니다.`) && deleteRoom(r.id)}>🗑</button>
             </div>
           ))}
         </nav>
         <div className="flex gap-1 border-t border-stone-200 p-2 dark:border-stone-800">
-          <button className="btn-ghost flex-1" onClick={() => onOpenSettings("ai")}>⚙️ 설정</button>
-          <button className="btn-ghost flex-1" onClick={() => onOpenSettings("data")}>📦 데이터</button>
+          <button className="btn-ghost flex-1 px-1" onClick={() => { onOpenLibrary(); onClose(); }}>📚 라이브러리</button>
+          <button className="btn-ghost flex-1 px-1" onClick={() => onOpenSettings("ai")}>⚙️ 설정</button>
+          <button className="btn-ghost flex-1 px-1" onClick={() => onOpenSettings("data")}>📦 데이터</button>
         </div>
       </aside>
     </>

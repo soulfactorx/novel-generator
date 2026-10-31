@@ -6,12 +6,14 @@ AI와 함께 소설·롤플레이를 써 내려가는 **브라우저 단독 실�
 **바로 사용하기** → https://soulfactorx.github.io/novel-generator/
 (또는 [Releases](https://github.com/soulfactorx/novel-generator/releases)에서 HTML 파일을 내려받아 브라우저로 열기)
 
-## 기능 (v0.1)
+## 기능 (v0.2)
 - **AI 제공업체**: Google Gemini · Anthropic Claude · OpenAI 호환(OpenRouter, OpenAI, Ollama 등 로컬 서버). 실시간 스트리밍, 자동 재시도, 중단을 지원합니다.
 - **이야기방**: 대화형 이야기 진행. 이야기 설정(세계관·인물)과 장기 기억 메모, 다음 행동 선택지, 다시 생성, 편집·삭제를 지원합니다.
+- **📚 라이브러리**: 세계관(설명·규칙·로어북), 등장인물(프로필·말투·로어북), 주인공을 만들어 여러 이야기에서 재사용합니다. 로어북은 키워드가 대화에 나올 때만 AI에게 전달됩니다.
+- **🧠 장기 기억**: 오래된 대화를 줄거리 요약으로 자동 정리해 긴 이야기에서도 앞 내용을 기억합니다.
 - **글쓰기 설정**: 시점, 분량, 전개 속도, 대사 비중, 창의성
 - **콘텐츠 수위**: 전체 이용가(기본) → 성숙 → 성인. 성인 등급은 사용자가 직접 만 19세 이상을 확인해야 선택할 수 있습니다. 어떤 등급에서도 미성년자, 비동의 성적 묘사, 실존 인물은 다루지 않으며, 각 AI 제공업체의 이용 정책이 우선합니다.
-- **데이터**: IndexedDB 저장, JSON 백업·복원, E.No.S Studio 백업 가져오기
+- **데이터**: IndexedDB 저장, JSON 백업·복원, E.No.S Studio 백업 가져오기(이야기·세계관·인물·주인공)
 
 ## API 키와 개인정보
 API 키와 이야기는 **이 브라우저 안에만** 저장됩니다. AI 요청은 브라우저에서 각 제공업체로 직접 전송되며, 이 저장소나 다른 서버를 거치지 않습니다.
@@ -29,6 +31,7 @@ npm run build      # 타입 검사 + dist/index.html (단일 파일)
 |---|---|
 | `src/lib/providers/` | 제공업체별 구현 (Gemini · Claude · OpenAI 호환), 재시도, 모델 목록 |
 | `src/lib/prompt.ts` | 시스템 프롬프트·수위 지침 |
+| `src/lib/lore.ts` · `memory.ts` | 로어북 매칭 · 장기 기억 정리 |
 | `src/lib/store.ts` | 앱 상태, 저장, 생성 흐름 |
 | `src/lib/db.ts` | IndexedDB |
 | `src/components/` | 화면 |
@@ -41,7 +44,7 @@ npm run build      # 타입 검사 + dist/index.html (단일 파일)
    Pages는 처음 한 번 **Settings → Pages → Source: GitHub Actions**로 켜 주세요.
 
 ## 로드맵
-- v0.2 세계관·캐릭터·페르소나·로어북 관리, 장기 기억 자동 갱신
+- ~~v0.2 세계관·캐릭터·페르소나·로어북 관리, 장기 기억 자동 갱신~~ ✅
 - v0.3 소설 자동 집필(개요 → 회차), 서고, TXT/EPUB 내보내기
 - v0.4 사용량·비용 대시보드, 자동 대체 모델, 이야기 진단, 책갈피와 분기
 

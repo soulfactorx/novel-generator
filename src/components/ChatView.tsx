@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { deleteMessage, editMessage, regenerate, send, stopGeneration, updateRoom, useApp } from "../lib/store";
+import { contextFor, deleteMessage, dismissMemoryError, editMessage, regenerate, send, stopGeneration, updateRoom, useApp } from "../lib/store";
 import { PROVIDER_LABEL } from "../lib/providers/catalog";
 import MessageView, { StoryText } from "./Message";
 import RoomDialog from "./RoomDialog";
 
-export default function ChatView({ onMenu, onOpenSettings }: { onMenu: () => void; onOpenSettings: (tab?: string) => void }) {
+export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewStory }: { onMenu: () => void; onOpenSettings: (tab?: string) => void; onOpenLibrary: () => void; onNewStory: () => void }) {
   const room = useApp((s) => (s.activeRoomId ? s.rooms[s.activeRoomId] : null));
   const live = useApp((s) => s.live);
   const settings = useApp((s) => s.settings);
   const [input, setInput] = useState("");
-  const [roomDialog, setRoomDialog] = useState(false);
+  const [roomDialog, setRoomDialog] = useState<null | "cast" | "memory">(null);
+  const lib = useApp((s) => s.library);
+  const memoryJob = useApp((s) => s.memoryJob);
   const endRef = useRef<HTMLDivElement>(null);
   const busy = live !== null;
   const myLive = live && room && live.roomId === room.id ? live : null;
@@ -25,14 +27,16 @@ export default function ChatView({ onMenu, onOpenSettings }: { onMenu: () => voi
           <div className="max-w-sm space-y-3">
             <div className="text-4xl">✒️</div>
             <p className="font-bold">AI와 함께 이야기를 써 보세요</p>
-            <p className="hint">왼쪽 메뉴에서 새 이야기를 만들거나, 기존 E.No.S 백업을 [데이터]에서 가져올 수 있습니다.</p>
-            {!hasKey && <button className="btn-primary" onClick={() => onOpenSettings("ai")}>먼저 AI 연결 설정하기</button>}
+            <p className="hint">새 이야기를 만들거나, 라이브러리에 세계관·인물을 먼저 만들어 둘 수 있습니다. 기존 E.No.S 백업은 [📦 데이터]에서 가져옵니다.</p>
+            {!hasKey ? <button className="btn-primary" onClick={() => onOpenSettings("ai")}>먼저 AI 연결 설정하기</button> : <div className="flex justify-center gap-2"><button className="btn-primary" onClick={onNewStory}>+ 새 이야기</button><button className="btn-ghost border border-stone-300 dark:border-stone-700" onClick={onOpenLibrary}>📚 라이브러리</button></div>}
           </div>
         </div>
       </div>
     );
 
   const last = room.messages[room.messages.length - 1];
+  const ctx = contextFor(room, lib);
+  const myMemory = memoryJob?.roomId === room.id ? memoryJob : null;
   const submit = (text: string) => {
     if (busy || (!text.trim() && room.messages.length > 0)) return;
     setInput("");
@@ -43,7 +47,8 @@ export default function ChatView({ onMenu, onOpenSettings }: { onMenu: () => voi
     <div className="flex min-h-0 flex-1 flex-col">
       <Header onMenu={onMenu} title={room.title} onTitle={(t) => updateRoom(room.id, { title: t })} right={
         <>
-          <button className="btn-ghost px-2 text-xs" onClick={() => setRoomDialog(true)} title="설정·장기 기억">📝 설정·기억</button>
+          <button className="btn-ghost max-w-40 px-2 text-xs" onClick={() => setRoomDialog("cast")} title="이야기 설정">📝 <span className="truncate">{ctx.world ? ctx.world.name : "설정"}{ctx.characters.length ? ` · ${ctx.characters.length}명` : ""}</span></button>
+          <button className="btn-ghost px-2 text-xs" onClick={() => setRoomDialog("memory")} title="장기 기억">🧠{myMemory && !myMemory.error ? "…" : ""}</button>
           <button className="btn-ghost hidden px-2 text-xs sm:inline-flex" onClick={() => onOpenSettings("ai")} title="AI 모델">{PROVIDER_LABEL[settings.provider]} · {settings.models[settings.provider]}</button>
         </>
       } />
@@ -52,7 +57,8 @@ export default function ChatView({ onMenu, onOpenSettings }: { onMenu: () => voi
           {room.messages.length === 0 && !myLive && (
             <div className="card space-y-2 text-sm">
               <p className="font-bold">이야기 시작하기</p>
-              <p className="hint">상단 [📝 설정·기억]에 세계관·등장인물·배경을 적어 두면 AI가 계속 참고합니다. 첫 장면을 직접 써도 되고, 아무것도 입력하지 않고 보내면 AI가 시작합니다.</p>
+              {(ctx.world || ctx.characters.length > 0 || ctx.persona) && <p className="text-sm">{ctx.world && <>🌍 {ctx.world.name} </>}{ctx.characters.length > 0 && <>🎭 {ctx.characters.map((c) => c.name).join(", ")} </>}{ctx.persona && <>🙋 {ctx.persona.name}</>}</p>}
+              <p className="hint">상단 [📝]에서 세계관·등장인물·주인공과 추가 설정을 고를 수 있습니다. 첫 장면을 직접 써도 되고, 아무것도 입력하지 않고 보내면 AI가 시작합니다.</p>
             </div>
           )}
           {room.messages.map((m) => (
@@ -64,6 +70,7 @@ export default function ChatView({ onMenu, onOpenSettings }: { onMenu: () => voi
                 <span className="h-2 w-2 animate-pulse rounded-full bg-violet-600" />
                 {myLive.status || (myLive.text ? `작성 중 · ${myLive.text.length.toLocaleString()}자` : myLive.thinking ? "생각하는 중…" : "응답 기다리는 중…")}
               </div>
+              {myLive.lore.length > 0 && <div className="text-xs text-stone-500" title={myLive.lore.map((h) => h.entry.title).join(", ")}>📖 참고한 로어: {myLive.lore.map((h) => h.entry.title || h.matched).join(", ")}</div>}
               {!myLive.text && myLive.thinking && <div className="line-clamp-3 text-xs italic text-stone-500">{myLive.thinking.slice(-300)}</div>}
               {myLive.text && <StoryText text={myLive.text} />}
             </div>
@@ -80,6 +87,11 @@ export default function ChatView({ onMenu, onOpenSettings }: { onMenu: () => voi
                 </div>
               )}
               <button className="btn-ghost text-xs" onClick={() => void regenerate(room.id)}>↻ 이 응답 다시 생성</button>
+            </div>
+          )}
+          {myMemory && (
+            <div className={`flex items-center gap-2 text-xs ${myMemory.error ? "text-rose-600" : "text-stone-500"}`}>
+              {myMemory.error ? <>⚠️ {myMemory.error} <button className="underline" onClick={dismissMemoryError}>닫기</button></> : <><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-stone-400" />🧠 오래된 대화를 장기 기억으로 정리하는 중…</>}
             </div>
           )}
           <div ref={endRef} />
@@ -107,7 +119,7 @@ export default function ChatView({ onMenu, onOpenSettings }: { onMenu: () => voi
           )}
         </div>
       </div>
-      {roomDialog && <RoomDialog room={room} onClose={() => setRoomDialog(false)} />}
+      {roomDialog && <RoomDialog room={room} initialTab={roomDialog} onClose={() => setRoomDialog(null)} onOpenLibrary={() => { setRoomDialog(null); onOpenLibrary(); }} />}
     </div>
   );
 }

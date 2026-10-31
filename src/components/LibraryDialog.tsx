@@ -1,0 +1,143 @@
+import { useState, type ReactNode } from "react";
+import { createEntity, createRoom, deleteEntity, entitiesOf, updateEntity, useApp } from "../lib/store";
+import type { Character, Entity, EntityKind, Persona, World } from "../lib/types";
+import Dialog from "./Dialog";
+import LoreEditor from "./LoreEditor";
+
+const KINDS: [EntityKind, string, string][] = [
+  ["world", "세계관", "🌍"],
+  ["character", "등장인물", "🎭"],
+  ["persona", "주인공", "🙋"],
+];
+
+export default function LibraryDialog({ initialKind = "world", onClose }: { initialKind?: EntityKind; onClose: () => void }) {
+  const lib = useApp((s) => s.library);
+  const rooms = useApp((s) => s.rooms);
+  const [kind, setKind] = useState<EntityKind>(initialKind);
+  const [sel, setSel] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+  const list = (entitiesOf(lib, kind) as Entity[]).filter((e) => !q || e.name.toLowerCase().includes(q.toLowerCase()));
+  const cur = sel ? lib[sel] : undefined;
+  const usedBy = (id: string) => Object.values(rooms).filter((r) => r.worldId === id || r.personaId === id || r.characterIds.includes(id)).length;
+
+  return (
+    <Dialog title="라이브러리" onClose={onClose} wide>
+      <div className="mb-3 flex gap-1">
+        {KINDS.map(([k, label, icon]) => (
+          <button key={k} className={`btn flex-1 ${kind === k ? "bg-violet-600 text-white" : "bg-stone-200/70 dark:bg-stone-800"}`} onClick={() => { setKind(k); setSel(null); setQ(""); }}>
+            {icon} {label} <span className="text-xs opacity-70">{entitiesOf(lib, k).length}</span>
+          </button>
+        ))}
+      </div>
+      <div className="grid gap-4 md:grid-cols-[14rem_1fr]">
+        <div className={`space-y-2 ${cur ? "hidden md:block" : ""}`}>
+          <div className="flex gap-2">
+            <input className="input" placeholder="검색" value={q} onChange={(e) => setQ(e.target.value)} aria-label="검색" />
+            <button className="btn-primary shrink-0" onClick={() => setSel(createEntity(kind))}>+ 추가</button>
+          </div>
+          {list.length === 0 && <p className="hint py-4">{kind === "world" ? "세계관은 이야기의 배경·규칙·로어북을 묶어 여러 이야기에서 재사용합니다." : kind === "character" ? "등장인물의 성격과 말투를 정해 두면 AI가 일관되게 연기합니다." : "주인공은 사용자가 연기하는 인물입니다. AI는 주인공의 대사를 대신 정하지 않습니다."}</p>}
+          <div className="space-y-1">
+            {list.map((e) => (
+              <button key={e.id} className={`w-full rounded-lg px-3 py-2 text-left ${e.id === sel ? "bg-violet-100 dark:bg-violet-950/60" : "hover:bg-stone-200/70 dark:hover:bg-stone-800"}`} onClick={() => setSel(e.id)}>
+                <div className="truncate text-sm font-semibold">{e.name || "(이름 없음)"}</div>
+                <div className="truncate text-xs text-stone-500">{subtitle(e, lib)}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className={cur ? "" : "hidden md:block"}>
+          {!cur ? (
+            <p className="hint grid h-full place-items-center py-10">왼쪽에서 항목을 고르거나 새로 추가하세요.</p>
+          ) : (
+            <div className="space-y-4">
+              <button className="btn-ghost px-2 text-xs md:hidden" onClick={() => setSel(null)}>← 목록</button>
+              {cur.kind === "world" && <WorldForm w={cur} />}
+              {cur.kind === "character" && <CharacterForm c={cur} worlds={entitiesOf(lib, "world")} />}
+              {cur.kind === "persona" && <PersonaForm p={cur} />}
+              <div className="flex flex-wrap gap-2 border-t border-stone-200 pt-3 dark:border-stone-800">
+                <button className="btn-primary" onClick={() => { startStory(cur, lib); onClose(); }}>✒️ 이 설정으로 새 이야기</button>
+                <button className="btn-danger ml-auto" onClick={() => { const n = usedBy(cur.id); if (confirm(`'${cur.name}'을(를) 삭제할까요?${n ? `\n이 항목을 쓰는 이야기 ${n}개에서는 연결만 해제되고 이야기는 남습니다.` : ""}`)) { deleteEntity(cur.id); setSel(null); } }}>삭제</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+function subtitle(e: Entity, lib: Record<string, Entity>): string {
+  if (e.kind === "world") return `${e.lore.length ? `로어 ${e.lore.length} · ` : ""}${e.description.slice(0, 40) || "설명 없음"}`;
+  if (e.kind === "character") return [e.summary, e.worldId && lib[e.worldId]?.name].filter(Boolean).join(" · ") || "소개 없음";
+  return e.profile.slice(0, 40) || "소개 없음";
+}
+
+/** 라이브러리 항목에서 바로 이야기 시작 */
+function startStory(e: Entity, lib: Record<string, Entity>) {
+  if (e.kind === "world") createRoom({ title: e.name, worldId: e.id, characterIds: entitiesOf(lib, "character").filter((c) => c.worldId === e.id).map((c) => c.id) });
+  else if (e.kind === "character") createRoom({ title: `${e.name}와(과)의 이야기`, characterIds: [e.id], ...(e.worldId && lib[e.worldId] ? { worldId: e.worldId } : {}) });
+  else createRoom({ personaId: e.id });
+}
+
+function F({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <div>
+      <span className="label">{label}</span>
+      {children}
+      {hint && <p className="hint mt-1">{hint}</p>}
+    </div>
+  );
+}
+
+function WorldForm({ w }: { w: World }) {
+  const up = (p: Partial<World>) => updateEntity<World>(w.id, p);
+  return (
+    <>
+      <F label="이름"><input className="input" value={w.name} onChange={(e) => up({ name: e.target.value })} aria-label="세계관 이름" /></F>
+      <F label="세계관 설명" hint="시대, 장소, 분위기, 사회 구조 등 이야기 전체의 배경">
+        <textarea className="input min-h-36" value={w.description} onChange={(e) => up({ description: e.target.value })} placeholder="예) 마법이 산업이 된 근대 항구 도시 '레인포트'. 비가 그치지 않고, 마력 등불이 거리를 밝힌다…" aria-label="세계관 설명" />
+      </F>
+      <F label="규칙 · 문체 지시" hint="AI가 반드시 지킬 것 (선택)">
+        <textarea className="input min-h-20" value={w.rules} onChange={(e) => up({ rules: e.target.value })} placeholder="예) 마법에는 반드시 대가가 따른다. / 현대 외래어를 쓰지 않는다." aria-label="세계관 규칙" />
+      </F>
+      <LoreEditor entries={w.lore} onChange={(lore) => up({ lore })} />
+    </>
+  );
+}
+
+function CharacterForm({ c, worlds }: { c: Character; worlds: World[] }) {
+  const up = (p: Partial<Character>) => updateEntity<Character>(c.id, p);
+  return (
+    <>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <F label="이름"><input className="input" value={c.name} onChange={(e) => up({ name: e.target.value })} aria-label="인물 이름" /></F>
+        <F label="소속 세계관">
+          <select className="input" value={c.worldId ?? ""} onChange={(e) => up({ worldId: e.target.value || undefined })} aria-label="소속 세계관">
+            <option value="">없음</option>
+            {worlds.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+        </F>
+      </div>
+      <F label="한 줄 소개"><input className="input" value={c.summary} onChange={(e) => up({ summary: e.target.value })} placeholder="예) 29세 · 조합 감찰관" aria-label="한 줄 소개" /></F>
+      <F label="프로필" hint="외모, 성격, 배경, 다른 인물과의 관계, 숨겨진 비밀 등">
+        <textarea className="input min-h-36" value={c.profile} onChange={(e) => up({ profile: e.target.value })} aria-label="프로필" />
+      </F>
+      <F label="말투 · 대사 예시" hint="실제 대사 2~4줄을 적으면 말투가 가장 잘 유지됩니다.">
+        <textarea className="input min-h-24" value={c.speech} onChange={(e) => up({ speech: e.target.value })} placeholder={'"규정은 규정입니다. 예외는 없어요."\n"…그래도, 오늘은 못 본 걸로 하죠."'} aria-label="말투 예시" />
+      </F>
+      <LoreEditor entries={c.lore} onChange={(lore) => up({ lore })} />
+    </>
+  );
+}
+
+function PersonaForm({ p }: { p: Persona }) {
+  const up = (x: Partial<Persona>) => updateEntity<Persona>(p.id, x);
+  return (
+    <>
+      <F label="이름"><input className="input" value={p.name} onChange={(e) => up({ name: e.target.value })} aria-label="주인공 이름" /></F>
+      <F label="주인공 소개" hint="AI가 다른 인물의 반응을 쓸 때 참고합니다. 나이, 외모, 직업, 처지 등">
+        <textarea className="input min-h-36" value={p.profile} onChange={(e) => up({ profile: e.target.value })} aria-label="주인공 소개" />
+      </F>
+    </>
+  );
+}
