@@ -1,0 +1,74 @@
+import type { ContentRating, Room, Settings, StyleOptions } from "./types";
+import { CHOICE_MARKER } from "./choices";
+
+/** 수위별 지침. 성인 단계도 각 AI 제공업체의 이용 정책 범위 안에서만 동작합니다. */
+export const RATING_POLICY: Record<ContentRating, string> = {
+  general:
+    "콘텐츠 등급: 전체 이용가. 노골적인 성적 묘사, 잔혹한 폭력 묘사, 혐오 표현을 쓰지 않는다. 갈등과 긴장은 감정과 상황으로 표현한다.",
+  mature:
+    "콘텐츠 등급: 성숙(15세 이상). 연애, 갈등, 어두운 주제를 다룰 수 있다. 신체적 친밀감은 암시와 장면 전환으로 처리하고 노골적 묘사는 하지 않는다. 폭력은 결과 중심으로 절제해 묘사한다.",
+  adult:
+    "콘텐츠 등급: 성인. 사용자는 성인임을 확인했다. 등장인물은 모두 성인이며 합의된 관계만 다룬다. 장면의 맥락과 관계 진전에 맞게 표현 수위를 조절하고, 이야기 전개를 우선한다. 미성년자, 비동의 성적 묘사, 실존 인물은 어떤 경우에도 다루지 않는다.",
+};
+
+const POV: Record<StyleOptions["pov"], string> = {
+  "third-limited": "3인칭 제한 시점. 주인공의 내면만 직접 서술하고 다른 인물은 말과 행동으로 드러낸다.",
+  first: "1인칭 주인공 시점. '나'는 주인공뿐이며 다른 인물의 속마음은 추측으로만 표현한다.",
+  "third-omniscient": "3인칭 전지적 시점. 여러 인물의 내면을 오갈 수 있으나 전환은 문단으로 분명히 구분한다.",
+};
+const LENGTH: Record<StyleOptions["length"], [string, number]> = {
+  short: ["한 번에 400~700자 정도로 짧게 쓴다.", 1500],
+  medium: ["한 번에 1,000~1,600자 정도로 쓴다.", 3500],
+  long: ["한 번에 2,500~3,500자 정도로 충분히 길게 쓴다.", 7000],
+};
+const PACING: Record<StyleOptions["pacing"], string> = {
+  fast: "사건 중심으로 빠르게 전개한다.",
+  balanced: "행동, 대사, 내면 묘사를 고르게 섞는다.",
+  slow: "감각과 분위기, 작은 표정 변화까지 천천히 묘사한다.",
+};
+const DIALOGUE: Record<StyleOptions["dialogue"], string> = {
+  balanced: "대사와 서술의 비중을 비슷하게 맞춘다.",
+  more: "인물 간 대화를 중심으로 주고받는 흐름을 살린다.",
+  less: "서술과 묘사를 중심으로 하고 대사는 꼭 필요한 만큼만 쓴다.",
+};
+
+/** 출력 토큰 상한 (분량 기준, 한국어 여유 포함) */
+export const outputTokensFor = (s: Settings) => LENGTH[s.style.length][1];
+
+export function buildSystemPrompt(s: Settings, room: Room): string {
+  const parts = [
+    "너는 사용자와 함께 이야기를 만들어 가는 소설가다. 사용자의 입력은 주인공의 행동·대사이거나 이야기 전개에 대한 요청이다.",
+    "",
+    "## 작성 원칙",
+    "- 한국어로, 읽기 좋은 웹소설 문체로 쓴다. 문단은 장면·행동이 바뀔 때 나누고 대사는 큰따옴표로 감싼다.",
+    "- 사용자가 직접 정한 주인공의 행동이나 대사를 임의로 대신 정하지 않는다. 다른 인물의 반응과 상황 변화를 중심으로 이어 쓴다.",
+    "- 앞서 쓴 문장이나 표현을 반복하지 않고, 매번 이야기를 한 걸음 진전시킨다.",
+    "- 설정과 이전 사건을 일관되게 유지한다. 해설·요약·메타 발언 없이 본문만 쓴다.",
+    `- 시점: ${POV[s.style.pov]}`,
+    `- 분량: ${LENGTH[s.style.length][0]}`,
+    `- 전개: ${PACING[s.style.pacing]}`,
+    `- 대사: ${DIALOGUE[s.style.dialogue]}`,
+    `- ${RATING_POLICY[s.contentRating]}`,
+  ];
+  if (s.choices) {
+    parts.push(
+      "",
+      "## 선택지",
+      `본문을 마친 뒤 빈 줄을 두고 "${CHOICE_MARKER}" 한 줄을 쓴 다음, 주인공이 할 수 있는 서로 다른 다음 행동 4가지를 "1. "부터 번호를 붙여 한 줄씩 짧게 제시한다.`,
+    );
+  }
+  if (room.premise.trim()) parts.push("", "## 이야기 설정", room.premise.trim());
+  if (room.memory.trim()) parts.push("", "## 지금까지의 줄거리 요약 (참고용, 문장을 그대로 반복하지 말 것)", room.memory.trim());
+  return parts.join("\n");
+}
+
+/** AI에게 보낼 대화: 최근 N개, 오류 메시지 제외, 첫 메시지는 user 로 시작 */
+export function buildHistory(room: Room, limit: number): { role: "user" | "assistant"; content: string }[] {
+  const msgs = room.messages.filter((m) => !m.error && m.text.trim());
+  const recent = msgs.slice(-limit).map((m) => ({
+    role: m.role,
+    content: m.role === "assistant" && m.choices?.length ? `${m.text}\n\n${CHOICE_MARKER}\n${m.choices.map((c, i) => `${i + 1}. ${c}`).join("\n")}` : m.text,
+  }));
+  while (recent.length && recent[0].role !== "user") recent.shift();
+  return recent;
+}

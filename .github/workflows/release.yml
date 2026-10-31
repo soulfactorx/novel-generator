@@ -1,0 +1,96 @@
+name: Release
+
+# 1) package.json 의 version 과 CHANGELOG.md(## vX.Y.Z)를 갱신해 main 에 푸시
+# 2) git tag v0.1.0 && git push origin v0.1.0   (또는 Actions → Release → Run workflow)
+# → 테스트 통과 시 GitHub Release(HTML + SHA256SUMS) 생성 + GitHub Pages 배포
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, test & publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Resolve version
+        id: v
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG="v${VERSION}"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "$TAG" ]; then
+            echo "::error::태그($GITHUB_REF_NAME)와 package.json 버전($TAG)이 다릅니다."; exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "asset=novel-generator-v${VERSION}.html" >> "$GITHUB_OUTPUT"
+
+      - name: Check release notes
+        run: node tools/release-notes.mjs "${{ steps.v.outputs.tag }}" > /dev/null
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: Prepare assets
+        run: |
+          mkdir -p release pages
+          cp dist/index.html "release/${{ steps.v.outputs.asset }}"
+          cp dist/index.html pages/index.html
+          (cd release && sha256sum "${{ steps.v.outputs.asset }}" > SHA256SUMS.txt)
+          node tools/release-notes.mjs "${{ steps.v.outputs.tag }}" > release/NOTES.md
+          {
+            echo ""
+            echo "---"
+            echo "**바로 사용**: https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/ · **파일로 사용**: \`${{ steps.v.outputs.asset }}\`을 내려받아 브라우저로 여세요."
+          } >> release/NOTES.md
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" release/*.html release/SHA256SUMS.txt --clobber
+            gh release edit "$TAG" --notes-file release/NOTES.md
+          else
+            gh release create "$TAG" release/*.html release/SHA256SUMS.txt --target "$GITHUB_SHA" \
+              --title "Novel Generator $TAG" --notes-file release/NOTES.md
+          fi
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: pages
+
+  pages:
+    name: Deploy GitHub Pages
+    needs: release
+    runs-on: ubuntu-latest
+    # Pages 가 아직 켜지지 않았어도 릴리스는 성공으로 처리 (Settings → Pages → Source: GitHub Actions)
+    continue-on-error: true
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v5
