@@ -2,7 +2,7 @@ name: Release
 
 # 1) package.json 의 version 과 CHANGELOG.md(## vX.Y.Z)를 갱신해 main 에 푸시
 # 2) git tag v0.1.0 && git push origin v0.1.0   (또는 Actions → Release → Run workflow)
-# → 테스트 통과 시 GitHub Release(HTML + SHA256SUMS) 생성 + GitHub Pages 배포
+# → 테스트 통과 시 GitHub Release(HTML + SHA256SUMS) 생성 → Pages 워크플로우가 이어서 배포
 on:
   push:
     tags: ["v*"]
@@ -51,9 +51,8 @@ jobs:
 
       - name: Prepare assets
         run: |
-          mkdir -p release pages
+          mkdir -p release
           cp dist/index.html "release/${{ steps.v.outputs.asset }}"
-          cp dist/index.html pages/index.html
           (cd release && sha256sum "${{ steps.v.outputs.asset }}" > SHA256SUMS.txt)
           node tools/release-notes.mjs "${{ steps.v.outputs.tag }}" > release/NOTES.md
           {
@@ -75,22 +74,3 @@ jobs:
               --title "Novel Generator $TAG" --notes-file release/NOTES.md
           fi
 
-      - uses: actions/upload-pages-artifact@v5
-        with:
-          path: pages
-
-  pages:
-    name: Deploy GitHub Pages
-    needs: release
-    runs-on: ubuntu-latest
-    # Pages 가 아직 켜지지 않았어도 릴리스는 성공으로 처리 (Settings → Pages → Source: GitHub Actions)
-    continue-on-error: true
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - id: deploy
-        uses: actions/deploy-pages@v5
