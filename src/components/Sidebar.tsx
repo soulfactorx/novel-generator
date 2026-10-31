@@ -46,7 +46,7 @@ export default function Sidebar({ open, onClose, onOpenSettings, onNewStory, onO
           {list.map((r) => (
             <div key={r.id} className={`group flex items-center rounded-lg ${r.id === active ? "bg-violet-100 dark:bg-violet-950/60" : "hover:bg-stone-200/70 dark:hover:bg-stone-800"}`}>
               <button className="min-w-0 flex-1 px-3 py-2 text-left" onClick={() => { selectRoom(r.id); onClose(); }}>
-                <div className="truncate text-sm font-semibold">{r.title}</div>
+                <div className="truncate text-sm font-semibold">{r.branchOf && <span className="text-stone-400" title="분기한 이야기">⑂ </span>}{r.title}</div>
                 <div className="truncate text-xs text-stone-500">{r.worldId && lib[r.worldId] ? `🌍 ${lib[r.worldId].name} · ` : ""}{r.messages.length}개 메시지 · {new Date(r.updatedAt).toLocaleDateString("ko-KR")}</div>
               </button>
               <button className="btn-danger mr-1 px-2 opacity-60 group-hover:opacity-100" title="이야기 삭제" onClick={() => confirm(`'${r.title}' 이야기를 삭제할까요? 되돌릴 수 없습니다.`) && deleteRoom(r.id)}>🗑</button>

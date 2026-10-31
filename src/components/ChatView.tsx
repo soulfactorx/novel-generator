@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { downloadBlob, roomToTxt, safeFileName } from "../lib/exporters";
-import { contextFor, novelFromRoom, deleteMessage, dismissMemoryError, editMessage, regenerate, send, stopGeneration, updateRoom, useApp } from "../lib/store";
+import { branchRoom, contextFor, deleteMessage, diagnoseRoom, dismissMemoryError, editMessage, novelFromRoom, regenerate, rewindTo, selectRoom, send, setBookmark, stopGeneration, updateRoom, useApp } from "../lib/store";
+import DiagnosisDialog from "./DiagnosisDialog";
+import Dialog from "./Dialog";
 import { PROVIDER_LABEL } from "../lib/providers/catalog";
 import MessageView, { StoryText } from "./Message";
 import RoomDialog from "./RoomDialog";
@@ -11,6 +13,10 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
   const settings = useApp((s) => s.settings);
   const [input, setInput] = useState("");
   const [roomDialog, setRoomDialog] = useState<null | "cast" | "memory">(null);
+  const [diagnosis, setDiagnosis] = useState(false);
+  const [bookmarks, setBookmarks] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const rooms = useApp((s) => s.rooms);
   const lib = useApp((s) => s.library);
   const memoryJob = useApp((s) => s.memoryJob);
   const endRef = useRef<HTMLDivElement>(null);
@@ -53,12 +59,19 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
           <MoreMenu items={[
             ["📄 대화를 TXT로 내보내기", () => downloadBlob(`${safeFileName(room.title)}.txt`, roomToTxt(room, { user: ctx.persona?.name }), "text/plain;charset=utf-8")],
             ["📖 이 이야기로 소설 기획하기", () => novelFromRoom(room.id)],
+            [`🔖 책갈피 목록 (${room.messages.filter((m) => m.bookmark !== undefined).length})`, () => setBookmarks(true)],
+            ["🩺 이야기 진단 (설정 붕괴·반복 점검)", () => setDiagnosis(true)],
           ]} />
           <button className="btn-ghost hidden px-2 text-xs sm:inline-flex" onClick={() => onOpenSettings("ai")} title="AI 모델">{PROVIDER_LABEL[settings.provider]} · {settings.models[settings.provider]}</button>
         </>
       } />
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-6 px-4 py-6">
+          {room.branchOf && (
+            <div className="text-xs text-stone-500">
+              ⑂ {rooms[room.branchOf.roomId] ? <button className="underline" onClick={() => selectRoom(room.branchOf!.roomId)}>'{rooms[room.branchOf.roomId].title}'</button> : `'${room.branchOf.title}'`}에서 분기한 이야기입니다.
+            </div>
+          )}
           {room.messages.length === 0 && !myLive && (
             <div className="card space-y-2 text-sm">
               <p className="font-bold">이야기 시작하기</p>
@@ -67,7 +80,20 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
             </div>
           )}
           {room.messages.map((m) => (
-            <MessageView key={m.id} m={m} onDelete={() => deleteMessage(room.id, m.id)} onEdit={(t) => editMessage(room.id, m.id, t)} onRetry={m === last ? () => void regenerate(room.id) : undefined} />
+            <MessageView
+              key={m.id}
+              m={m}
+              onDelete={() => deleteMessage(room.id, m.id)}
+              onEdit={(t) => editMessage(room.id, m.id, t)}
+              onRetry={m === last ? () => void regenerate(room.id) : undefined}
+              onBookmark={(l) => setBookmark(room.id, m.id, l)}
+              onBranch={() => branchRoom(room.id, m.id)}
+              onRewind={m === last || busy ? undefined : () => {
+                const after = room.messages.length - room.messages.indexOf(m) - 1;
+                const stale = room.memoryCursorAt !== undefined && room.memoryCursorAt > m.createdAt;
+                if (confirm(`이 메시지 뒤의 ${after}개 메시지를 삭제할까요?${stale ? "\n장기 기억에 삭제될 내용이 들어 있어 기억도 비우고 다시 정리합니다." : ""}\n지우지 않고 남기려면 [여기서 분기]를 쓰세요.`)) rewindTo(room.id, m.id);
+              }}
+            />
           ))}
           {myLive && (
             <div className="space-y-2" aria-live="polite">
@@ -91,7 +117,20 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
                   ))}
                 </div>
               )}
-              <button className="btn-ghost text-xs" onClick={() => void regenerate(room.id)}>↻ 이 응답 다시 생성</button>
+              {note === null ? (
+                <div className="flex flex-wrap gap-1">
+                  <button className="btn-ghost text-xs" onClick={() => void regenerate(room.id)}>↻ 이 응답 다시 생성</button>
+                  <button className="btn-ghost text-xs" onClick={() => setNote("")}>✍️ 지시하고 다시 생성</button>
+                </div>
+              ) : (
+                <div className="card space-y-2">
+                  <textarea className="input min-h-16 text-sm" autoFocus value={note} onChange={(e) => setNote(e.target.value)} placeholder="예) 서율이 더 차갑게 반응하게, 대화를 늘려서" aria-label="다시 생성 지시" />
+                  <div className="flex justify-end gap-2">
+                    <button className="btn-ghost text-xs" onClick={() => setNote(null)}>취소</button>
+                    <button className="btn-primary text-xs" disabled={!note.trim()} onClick={() => { const n = note; setNote(null); void regenerate(room.id, n); }}>다시 생성</button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {myMemory && (
@@ -124,6 +163,35 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
           )}
         </div>
       </div>
+      {diagnosis && (
+        <DiagnosisDialog
+          title="🩺 이야기 진단"
+          run={(onText) => diagnoseRoom(room.id, onText)}
+          last={room.lastDiagnosis}
+          applyLabel="진단 반영해 마지막 응답 다시 생성"
+          canApply={last?.role === "assistant" && !last.error && !busy}
+          onApply={(d) => void regenerate(room.id, d)}
+          onClose={() => setDiagnosis(false)}
+        />
+      )}
+      {bookmarks && (
+        <Dialog title="🔖 책갈피" onClose={() => setBookmarks(false)}>
+          {room.messages.some((m) => m.bookmark !== undefined) ? (
+            <ul className="space-y-1">
+              {room.messages.map((m, i) => m.bookmark !== undefined && (
+                <li key={m.id}>
+                  <button className="w-full rounded-lg px-3 py-2 text-left hover:bg-stone-200/70 dark:hover:bg-stone-800" onClick={() => { setBookmarks(false); setTimeout(() => document.getElementById(`msg-${m.id}`)?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 50); }}>
+                    <div className="text-sm font-semibold">🔖 {m.bookmark || `${i + 1}번째 메시지`}</div>
+                    <div className="truncate text-xs text-stone-500">{m.text.slice(0, 80)}</div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="hint">메시지 아래의 🔖를 눌러 중요한 장면에 책갈피를 달 수 있습니다.</p>
+          )}
+        </Dialog>
+      )}
       {roomDialog && <RoomDialog room={room} initialTab={roomDialog} onClose={() => setRoomDialog(null)} onOpenLibrary={() => { setRoomDialog(null); onOpenLibrary(); }} />}
     </div>
   );

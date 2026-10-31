@@ -8,8 +8,10 @@ import { RATING_POLICY } from "../lib/prompt";
 import { getState, importLegacy, importLegacyExtra, updateSettings, upsertLibrary, upsertNovels, upsertRooms, useApp } from "../lib/store";
 import type { ContentRating, ProviderId, Room, Settings, StyleOptions } from "../lib/types";
 import Dialog from "./Dialog";
+import UsageTab from "./UsageTab";
+import { hasKeyFor } from "../lib/store";
 
-const TABS = [["ai", "AI 연결"], ["writing", "글쓰기"], ["rating", "콘텐츠 수위"], ["data", "데이터"]] as const;
+const TABS = [["ai", "AI 연결"], ["writing", "글쓰기"], ["rating", "콘텐츠 수위"], ["usage", "사용량·비용"], ["data", "데이터"]] as const;
 
 export default function SettingsDialog({ initialTab, onClose }: { initialTab: string; onClose: () => void }) {
   const [tab, setTab] = useState(initialTab);
@@ -26,6 +28,7 @@ export default function SettingsDialog({ initialTab, onClose }: { initialTab: st
       {tab === "writing" && <WritingTab />}
       {tab === "rating" && <RatingTab />}
       {tab === "data" && <DataTab />}
+      {tab === "usage" && <UsageTab />}
     </Dialog>
   );
 }
@@ -114,6 +117,33 @@ function AiTab() {
         {p !== "anthropic" && <button className="btn-ghost border border-stone-300 dark:border-stone-700" onClick={fetchList}>🔄 목록 불러오기</button>}
       </div>
       {test && <p className={`text-sm font-semibold break-words ${test.ok === false ? "text-rose-600" : test.ok ? "text-emerald-600" : "text-stone-500"}`}>{test.text}</p>}
+      <FallbackSection />
+    </div>
+  );
+}
+
+function FallbackSection() {
+  const s = useApp((x) => x.settings);
+  const fb = s.fallback;
+  const set = (p: Partial<Settings["fallback"]>) => updateSettings({ fallback: { ...fb, ...p } });
+  const presets = fb.provider === "anthropic" ? CLAUDE_MODELS : fb.provider === "gemini" ? GEMINI_MODELS : OPENAI_PRESETS;
+  const noKey = fb.enabled && !hasKeyFor(s, fb.provider);
+  const same = fb.provider === s.provider && fb.model === s.models[s.provider];
+  return (
+    <div className="card space-y-3">
+      <label className="flex items-center gap-2 text-sm font-bold"><input type="checkbox" checked={fb.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> ↪ 자동 대체 모델</label>
+      <p className="hint">기본 모델이 과부하·사용 한도·서버 오류·네트워크 문제로 (자동 재시도 후에도) 실패하면 이 모델로 한 번 더 시도합니다. API 키 오류나 요청 거절에는 쓰이지 않습니다.</p>
+      {fb.enabled && (
+        <div className="grid gap-2 sm:grid-cols-[10rem_1fr]">
+          <select className="input" value={fb.provider} onChange={(e) => { const p = e.target.value as ProviderId; set({ provider: p, model: s.models[p] }); }} aria-label="대체 제공업체">
+            {(["gemini", "anthropic", "openai"] as ProviderId[]).map((id) => <option key={id} value={id}>{PROVIDER_LABEL[id]}</option>)}
+          </select>
+          <input className="input font-mono" list="fallback-models" value={fb.model} onChange={(e) => set({ model: e.target.value })} aria-label="대체 모델" />
+          <datalist id="fallback-models">{presets.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</datalist>
+        </div>
+      )}
+      {noKey && <p className="text-xs font-semibold text-amber-600">⚠️ {PROVIDER_LABEL[fb.provider]} API 키가 없어 대체 모델을 쓸 수 없습니다. 위에서 제공업체를 바꿔 키를 입력해 두세요(키는 제공업체별로 따로 저장됩니다).</p>}
+      {fb.enabled && same && <p className="text-xs font-semibold text-amber-600">⚠️ 기본 모델과 같습니다. 다른 모델(가능하면 다른 제공업체)을 고르세요.</p>}
     </div>
   );
 }

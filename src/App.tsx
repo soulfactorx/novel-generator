@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { init, useApp } from "./lib/store";
+import { formatUsd } from "./lib/pricing";
+import { monthRange, summarize } from "./lib/usage";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import SettingsDialog from "./components/SettingsDialog";
@@ -12,6 +14,9 @@ export default function App() {
   const theme = useApp((s) => s.settings.theme);
   const storageError = useApp((s) => s.storageError);
   const view = useApp((s) => s.view);
+  const budget = useApp((s) => s.settings.monthlyBudget);
+  const usage = useApp((s) => s.usage);
+  const spent = budget ? summarize(usage, ...monthRange()).total.usd : 0;
   const [menu, setMenu] = useState(false);
   const [settingsTab, setSettingsTab] = useState<string | null>(null);
   const [library, setLibrary] = useState(false);
@@ -32,6 +37,11 @@ export default function App() {
     <div className="flex h-full">
       <Sidebar open={menu} onClose={() => setMenu(false)} onOpenSettings={(t) => setSettingsTab(t ?? "ai")} onNewStory={() => setNewRoom(true)} onOpenLibrary={openLibrary} />
       <main className="flex min-w-0 flex-1 flex-col">
+        {budget > 0 && spent >= budget && (
+          <button className="bg-rose-100 px-4 py-2 text-left text-xs text-rose-900 dark:bg-rose-900/40 dark:text-rose-200" onClick={() => setSettingsTab("usage")}>
+            💸 이번 달 예상 비용 {formatUsd(spent)}이(가) 설정한 월 예산 {formatUsd(budget)}을(를) 넘었습니다. (사용량 보기)
+          </button>
+        )}
         {storageError && <div className="bg-amber-100 px-4 py-2 text-xs text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">⚠️ {storageError}</div>}
         {view === "novels" ? (
           <NovelView onMenu={() => setMenu(true)} onOpenSettings={(t) => setSettingsTab(t ?? "ai")} onOpenLibrary={openLibrary} />

@@ -2,7 +2,9 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { downloadBlob, novelToEpub, novelToTxt, safeFileName } from "../lib/exporters";
 import { charCount, EPISODE_LENGTH } from "../lib/novel";
 import { uid } from "../lib/id";
-import { deleteLastEpisode, dismissNovelError, getState, editEpisode, generateOutline, stopNovel, updateNovel, updateSettings, useApp, writeEpisode, writeEpisodes } from "../lib/store";
+import DiagnosisDialog from "./DiagnosisDialog";
+import { formatUsd } from "../lib/pricing";
+import { deleteLastEpisode, diagnoseEpisode, dismissNovelError, getState, editEpisode, generateOutline, stopNovel, updateNovel, updateSettings, useApp, writeEpisode, writeEpisodes } from "../lib/store";
 import type { EpisodeLength, Novel } from "../lib/types";
 import CastPicker from "./CastPicker";
 import { StoryText } from "./Message";
@@ -200,7 +202,7 @@ function ManuscriptTab({ novel: n, live, busy, onRead, onOutline, onOpenSettings
               <span className="w-10 shrink-0 text-sm font-bold text-violet-600">{i + 1}화</span>
               <span className="min-w-0 flex-1 truncate text-sm font-semibold">{e.title}</span>
               {e.incomplete && <span className="shrink-0 rounded bg-amber-100 px-1.5 text-xs text-amber-800 dark:bg-amber-900/50 dark:text-amber-200">미완성</span>}
-              <span className="shrink-0 text-xs text-stone-500">{charCount(e.text).toLocaleString()}자</span>
+              <span className="shrink-0 text-xs text-stone-500">{charCount(e.text).toLocaleString()}자{e.usage?.usd !== undefined && ` · ${formatUsd(e.usage.usd)}`}</span>
             </button>
           </li>
         ))}
@@ -236,6 +238,7 @@ function Reader({ novel: n, index, busy, onIndex, onClose }: { novel: Novel; ind
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(e.text);
   const [rewrite, setRewrite] = useState<string | null>(null);
+  const [diag, setDiag] = useState(false);
   const topRef = useRef<HTMLDivElement>(null);
   useEffect(() => { setEditing(false); setRewrite(null); setDraft(e.text); topRef.current?.scrollIntoView?.(); }, [index, e.text]);
   const isLast = index === n.episodes.length - 1;
@@ -264,6 +267,7 @@ function Reader({ novel: n, index, busy, onIndex, onClose }: { novel: Novel; ind
       ) : (
         <div style={{ fontSize }}><StoryText text={e.text} /></div>
       )}
+      {diag && <DiagnosisDialog title={`🩺 ${index + 1}화 진단`} run={(onText) => diagnoseEpisode(n.id, index, onText)} applyLabel="진단 반영해 다시 쓰기" canApply={!busy} onApply={(d) => setRewrite(d)} onClose={() => setDiag(false)} />}
       {e.summary && !editing && <details className="hint"><summary className="cursor-pointer">이 회차 요약 (다음 회차 집필에 사용)</summary><textarea className="input mt-2 min-h-20 text-xs" value={e.summary} onChange={(x) => editEpisode(n.id, index, { summary: x.target.value })} aria-label="회차 요약" /></details>}
       {rewrite !== null && (
         <div className="card space-y-2">
@@ -281,6 +285,7 @@ function Reader({ novel: n, index, busy, onIndex, onClose }: { novel: Novel; ind
           <button className="btn-ghost" disabled={index === 0} onClick={() => onIndex(index - 1)}>← 이전 화</button>
           <button className="btn-ghost" onClick={() => setEditing(true)}>✏️ 편집</button>
           <button className="btn-ghost" disabled={busy} onClick={() => setRewrite("")}>↻ 다시 쓰기</button>
+          <button className="btn-ghost" onClick={() => setDiag(true)}>🩺 진단</button>
           {isLast && <button className="btn-danger" onClick={() => { if (confirm(`${index + 1}화 원고를 삭제할까요? 개요는 남습니다.`)) { deleteLastEpisode(n.id); onClose(); } }}>삭제</button>}
           <button className="btn-ghost ml-auto" disabled={isLast} onClick={() => onIndex(index + 1)}>다음 화 →</button>
         </div>

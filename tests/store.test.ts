@@ -15,7 +15,22 @@ beforeEach(async () => {
   const { IDBFactory } = await import("fake-indexeddb");
   globalThis.indexedDB = new IDBFactory(); // 테스트마다 빈 브라우저 저장소
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+/** 재시도 대기(setTimeout)만 가짜 시계로 빨리 감으며 실행 — IndexedDB 등 다른 비동기는 그대로 */
+async function fastRetries<T>(run: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let done = false;
+  const p = run().finally(() => (done = true));
+  while (!done) {
+    await vi.advanceTimersByTimeAsync(1000);
+    await new Promise((r) => setImmediate(r));
+  }
+  vi.useRealTimers();
+  return p;
+}
 
 describe("store", () => {
   test("chat round-trip is persisted and survives reload", async () => {
@@ -224,5 +239,81 @@ describe("novels in store", () => {
     expect(s.getState().novels[nid].brief).toContain("- 첫 만남");
     s.deleteEntity(c);
     expect(s.getState().novels[nid].characterIds).toEqual([]);
+  });
+});
+
+describe("v0.4: fallback, usage, directives, branches", () => {
+  const overloaded = () => json({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } }, 529);
+  const geminiOk = (text: string) => json({ candidates: [{ content: { parts: [{ text }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 1000, candidatesTokenCount: 100 } });
+
+  test("server error → fallback model; usage recorded with cost and persisted", async () => {
+    let s = await freshStore();
+    s.updateSettings({ provider: "anthropic", keys: { gemini: "gk", anthropic: "ak", openai: "" }, streaming: false, fallback: { enabled: true, provider: "gemini", model: "gemini-3.8-flash" } });
+    const id = s.createRoom();
+    const calls = mockFetch(overloaded(), overloaded(), overloaded(), (url) => (expect(url).toContain("gemini-3.8-flash"), geminiOk("대체 모델 장면")));
+    await fastRetries(() => s.send(id, "간다"));
+    expect(calls).toHaveLength(4);
+    const m = s.getState().rooms[id].messages[1];
+    expect(m).toMatchObject({ text: "대체 모델 장면", model: "gemini-3.8-flash", fallback: true });
+    expect(m.usage?.usd).toBeGreaterThan(0);
+    const { summarize, monthRange } = await import("../src/lib/usage");
+    expect(summarize(s.getState().usage, ...monthRange()).total.n).toBe(1);
+    await s.flush();
+    s = await freshStore();
+    expect(summarize(s.getState().usage, ...monthRange()).models[0].model).toBe("gemini-3.8-flash");
+  });
+
+  test("auth errors and missing fallback key do not fall back", async () => {
+    const s = await freshStore();
+    s.updateSettings({ provider: "anthropic", keys: { gemini: "", anthropic: "ak", openai: "" }, fallback: { enabled: true, provider: "gemini", model: "gemini-3.8-flash" } });
+    const id = s.createRoom();
+    let calls = mockFetch(json({ type: "error", error: { type: "authentication_error", message: "bad" } }, 401));
+    await s.send(id, "a");
+    expect(calls).toHaveLength(1);
+    expect(s.getState().rooms[id].messages.at(-1)!.error).toBeTruthy();
+    calls = mockFetch(overloaded(), overloaded(), overloaded());
+    await fastRetries(() => s.regenerate(id));
+    expect(calls).toHaveLength(3);
+    expect(calls.every((c) => c.url.includes("anthropic"))).toBe(true); // Gemini 키 없음 → 대체 안 함
+  });
+
+  test("regenerate with a directive appends it to the last user turn", async () => {
+    const s = await freshStore();
+    s.updateSettings({ provider: "anthropic", keys });
+    const id = s.createRoom();
+    mockFetch(claudeStream("첫 응답"));
+    await s.send(id, "간다");
+    const calls = mockFetch(claudeStream("고친 응답"));
+    await s.regenerate(id, "대화를 늘려라");
+    const last = calls[0].body.messages.at(-1).content.at(-1).text;
+    expect(last).toContain("간다");
+    expect(last).toContain("<작가 지시: 이번 응답에 반영할 것>\n대화를 늘려라");
+    expect(s.getState().rooms[id].messages.map((m) => m.text)).toEqual(["간다", "고친 응답"]);
+  });
+
+  test("diagnosis stored on room; bookmarks; branch keeps/clears memory; rewind", async () => {
+    const s = await freshStore();
+    s.updateSettings({ provider: "anthropic", keys });
+    const id = s.createRoom({ title: "원본" });
+    const msgs = Array.from({ length: 6 }, (_, i) => ({ id: "m" + i, role: (i % 2 ? "assistant" : "user") as "user" | "assistant", text: "t" + i, createdAt: i + 1 }));
+    s.updateRoom(id, { messages: msgs, memory: "요약(m3까지)", memoryCursorAt: 4 });
+    mockFetch(claudeStream("### 한 줄 평\n- 무난\n\n[다음 지시]\n긴장감을 높여라."));
+    const r = await s.diagnoseRoom(id);
+    expect(r.directive).toBe("긴장감을 높여라.");
+    expect(s.getState().rooms[id].lastDiagnosis?.report).toContain("무난");
+    s.setBookmark(id, "m2", "첫 고백");
+    expect(s.getState().rooms[id].messages[2].bookmark).toBe("첫 고백");
+    s.setBookmark(id, "m2", null);
+    expect("bookmark" in s.getState().rooms[id].messages[2]).toBe(false);
+    const b1 = s.branchRoom(id, "m4")!; // 기억(m3까지)은 분기점 이전 → 유지
+    expect(s.getState().rooms[b1]).toMatchObject({ title: "원본 (분기)", memory: "요약(m3까지)", branchOf: { roomId: id, messageId: "m4" } });
+    expect(s.getState().rooms[b1].messages.map((m) => m.text)).toEqual(["t0", "t1", "t2", "t3", "t4"]);
+    expect(s.getState().activeRoomId).toBe(b1);
+    const b2 = s.branchRoom(id, "m1")!; // 기억에 분기점 이후 내용 → 비움
+    expect(s.getState().rooms[b2]).toMatchObject({ memory: "", memoryCursorAt: undefined });
+    expect(s.getState().rooms[id].messages).toHaveLength(6); // 원본 그대로
+    s.rewindTo(id, "m1");
+    expect(s.getState().rooms[id].messages.map((m) => m.id)).toEqual(["m0", "m1"]);
+    expect(s.getState().rooms[id].memory).toBe("");
   });
 });

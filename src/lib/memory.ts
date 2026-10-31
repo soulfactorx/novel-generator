@@ -7,6 +7,8 @@ export const MEMORY_BATCH = 10;
 /** 수동 정리 시에도 남겨 두는 최근 메시지 수 */
 export const MEMORY_KEEP_RECENT = 6;
 export const MEMORY_MAX_CHARS = 2000;
+/** 한 번에 정리하는 최대 메시지 수 (긴 이야기를 처음부터 정리할 때 요청이 너무 커지지 않게, 나머지는 다음 차례에) */
+export const MEMORY_MAX_BATCH = 80;
 
 const valid = (m: Message) => !m.error && m.text.trim().length > 0;
 
@@ -22,7 +24,7 @@ export function pendingForMemory(room: Room, contextMessages: number, mode: "aut
   const cursor = room.memoryCursorAt ?? -Infinity;
   const pending = outside.filter((m) => m.createdAt > cursor);
   if (mode === "auto" && pending.length < MEMORY_BATCH) return [];
-  return pending;
+  return pending.slice(0, MEMORY_MAX_BATCH);
 }
 
 export function buildMemoryRequest(s: Settings, room: Room, pending: Message[], names: { user?: string } = {}): { system: string; messages: ChatMessage[] } {

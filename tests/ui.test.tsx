@@ -91,3 +91,16 @@ test("novel: plan → AI outline → write episode → read → export menu", as
   expect(byText("EPUB")).toBeTruthy();
   expect(byText("TXT")).toBeTruthy();
 });
+
+test("usage tab renders recorded usage; fallback section shows key warning", async () => {
+  const store = await import("../src/lib/store");
+  await act(async () => byText("⚙️ 설정")!.click());
+  await act(async () => byText("사용량·비용")!.click());
+  expect(document.body.textContent).toContain("예상 비용");
+  expect(document.body.textContent).toContain("소설 개요"); // 앞 테스트의 개요·집필 사용량
+  expect(document.body.textContent).toContain("claude-sonnet-5-5");
+  await act(async () => byText("AI 연결")!.click());
+  store.updateSettings({ fallback: { enabled: true, provider: "openai", model: "gpt-4.1" } });
+  await wait();
+  expect(document.body.textContent).toContain("API 키가 없어 대체 모델을 쓸 수 없습니다");
+});

@@ -6,9 +6,12 @@ import { libraryFromExtra, type LegacyImport } from "./importLegacy";
 import { formatLore, matchLore, type LoreHit } from "./lore";
 import { buildMemoryRequest, cleanMemory, pendingForMemory } from "./memory";
 import { buildHistory, buildSystemPrompt, outputTokensFor, type StoryContext } from "./prompt";
-import { generate, ProviderError, type Usage } from "./providers";
+import { generate, ProviderError, type GenerateRequest, type GenerateResult, type Usage } from "./providers";
+import { emptyUsage, recordUsage, type UsageData, type UsageKind } from "./usage";
+import { buildEpisodeDiagnosis, buildRoomDiagnosis, splitDiagnosis } from "./diagnose";
+import { PROVIDER_LABEL } from "./providers/catalog";
 import { buildEpisodeRequest, buildOutlineRequest, EPISODE_LENGTH, parseOutline, previewEpisode, splitEpisode } from "./novel";
-import { DEFAULT_SETTINGS, normalizeNovel, normalizeRoom, normalizeSettings, type Character, type Entity, type EntityKind, type Episode, type Message, type Novel, type Persona, type Room, type Settings, type World } from "./types";
+import { DEFAULT_SETTINGS, type MessageUsage, normalizeNovel, normalizeRoom, normalizeSettings, type Character, type Entity, type EntityKind, type Episode, type Message, type Novel, type Persona, type Room, type Settings, type World } from "./types";
 
 export interface LiveState {
   roomId: string;
@@ -34,6 +37,7 @@ export interface AppState {
   activeNovelId: string | null;
   novelLive: NovelLive | null;
   novelError: { novelId: string; message: string } | null;
+  usage: UsageData;
 }
 export interface NovelLive {
   novelId: string;
@@ -46,11 +50,12 @@ export interface NovelLive {
   startedAt: number;
 }
 
-let state: AppState = { ready: false, storageError: "", settings: DEFAULT_SETTINGS, rooms: {}, library: {}, activeRoomId: null, live: null, memoryJob: null, lastUsage: null, legacyExtra: null, view: "rooms", novels: {}, activeNovelId: null, novelLive: null, novelError: null };
+let state: AppState = { ready: false, storageError: "", settings: DEFAULT_SETTINGS, rooms: {}, library: {}, activeRoomId: null, live: null, memoryJob: null, lastUsage: null, legacyExtra: null, view: "rooms", novels: {}, activeNovelId: null, novelLive: null, novelError: null, usage: emptyUsage() };
 const subs = new Set<() => void>();
 const dirty = { rooms: new Set<string>(), library: new Set<string>(), novels: new Set<string>() };
 const deleted = { rooms: new Set<string>(), library: new Set<string>(), novels: new Set<string>() };
 let settingsDirty = false;
+let usageDirty = false;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let controller: AbortController | null = null;
 
@@ -87,11 +92,14 @@ export async function flush() {
   deleted.novels.clear();
   const saveSettings = settingsDirty;
   settingsDirty = false;
+  const saveUsage = usageDirty;
+  usageDirty = false;
   try {
     await putRecords("rooms", rooms.items, delRooms);
     await putRecords("library", lib.items, delLib);
     await putRecords("novels", nov.items, delNov);
     if (saveSettings) await putKV("settings", state.settings);
+    if (saveUsage) await putKV("usage", state.usage);
     if (state.storageError) setState({ storageError: "" });
   } catch (e) {
     rooms.ids.forEach((id) => dirty.rooms.add(id));
@@ -101,6 +109,7 @@ export async function flush() {
     delRooms.forEach((id) => deleted.rooms.add(id));
     delLib.forEach((id) => deleted.library.add(id));
     settingsDirty ||= saveSettings;
+    usageDirty ||= saveUsage;
     setState({ storageError: `저장 실패: ${(e as Error)?.message || e}` });
     saveTimer = setTimeout(() => void flush(), 3000);
   }
@@ -119,7 +128,7 @@ export async function init() {
     library.forEach((e) => (lib[e.id] = e));
     const recent = Object.values(map).sort((a, b) => b.updatedAt - a.updatedAt)[0];
     const extra = (kv.legacyExtra as LegacyImport["extra"]) || null;
-    setState({ ready: true, settings: normalizeSettings(kv.settings), rooms: map, library: lib, activeRoomId: recent?.id ?? null, novels: nmap, activeNovelId: recentNovel?.id ?? null, view: kv.view === "novels" ? "novels" : "rooms", legacyExtra: extra && (extra.worlds?.length || extra.characters?.length || extra.personas?.length) ? extra : null });
+    setState({ ready: true, settings: normalizeSettings(kv.settings), rooms: map, library: lib, activeRoomId: recent?.id ?? null, novels: nmap, activeNovelId: recentNovel?.id ?? null, view: kv.view === "novels" ? "novels" : "rooms", usage: (kv.usage as UsageData)?.days ? (kv.usage as UsageData) : emptyUsage(), legacyExtra: extra && (extra.worlds?.length || extra.characters?.length || extra.personas?.length) ? extra : null });
     void requestPersist();
   } catch (e) {
     setState({ ready: true, storageError: `브라우저 저장소(IndexedDB)를 열 수 없습니다: ${(e as Error)?.message || e}. 이 상태에서는 데이터가 저장되지 않습니다.` });
@@ -254,6 +263,46 @@ export function importLegacyExtra(): number {
   return items.length;
 }
 
+/* ---------------- AI 호출 공통: 대체 모델 + 사용량 집계 ---------------- */
+const FALLBACK_KINDS = new Set(["rate", "server", "network"]);
+export const hasKeyFor = (s: Settings, p: Settings["provider"]) => (p === "openai" ? !!s.keys.openai || /localhost|127\.0\.0\.1/.test(s.openaiBaseUrl) : !!s.keys[p]);
+
+export interface AIResult extends GenerateResult {
+  usedFallback: boolean;
+  cost?: MessageUsage;
+}
+/**
+ * 모든 AI 요청은 여기를 거친다.
+ * - 기본 모델이 과부하·한도·서버·네트워크 오류(자동 재시도 후에도)면 대체 모델로 한 번 더
+ *   (인증·요청 오류·거절은 대체하지 않음 — 거절을 다른 모델로 우회하지 않는다)
+ * - 응답마다 사용량·비용 기록
+ */
+export async function callAI(kind: UsageKind, req: Omit<GenerateRequest, "settings">, opts: { settings?: Settings; onRestart?: () => void } = {}): Promise<AIResult> {
+  const s = opts.settings ?? state.settings;
+  const fb = s.fallback;
+  const record = (provider: Settings["provider"], res: GenerateResult): MessageUsage | undefined => {
+    if (!res.usage) return undefined;
+    const { data, usd } = recordUsage(state.usage, { provider, model: res.model, kind, usage: res.usage, custom: state.settings.customPrices });
+    setState({ usage: data, lastUsage: { ...res.usage, model: res.model } });
+    usageDirty = true;
+    scheduleSave();
+    return { input: res.usage.input, output: res.usage.output, ...(res.usage.cacheRead ? { cacheRead: res.usage.cacheRead } : {}), ...(usd !== null ? { usd } : {}) };
+  };
+  try {
+    const res = await generate({ ...req, settings: s });
+    return { ...res, usedFallback: false, cost: record(s.provider, res) };
+  } catch (e) {
+    const err = e as ProviderError;
+    const same = fb.provider === s.provider && fb.model === s.models[s.provider];
+    if (!(err instanceof ProviderError) || !FALLBACK_KINDS.has(err.kind) || !fb.enabled || !fb.model.trim() || same || !hasKeyFor(s, fb.provider) || req.signal?.aborted) throw e;
+    opts.onRestart?.();
+    req.onStatus?.(`기본 모델 오류(${err.message.slice(0, 60)}) → 대체 모델 ${PROVIDER_LABEL[fb.provider]} · ${fb.model}로 다시 시도합니다`);
+    const s2: Settings = { ...s, provider: fb.provider, models: { ...s.models, [fb.provider]: fb.model } };
+    const res = await generate({ ...req, settings: s2 });
+    return { ...res, usedFallback: true, cost: record(fb.provider, res) };
+  }
+}
+
 /* ---------------- 생성 ---------------- */
 export const isGenerating = () => state.live !== null;
 export function stopGeneration() {
@@ -271,13 +320,13 @@ export async function send(roomId: string, text: string) {
 }
 
 /** 마지막 AI 응답을 지우고 다시 생성 */
-export async function regenerate(roomId: string) {
+export async function regenerate(roomId: string, note = "") {
   const r = state.rooms[roomId];
   if (!r || isGenerating()) return;
   const msgs = [...r.messages];
   while (msgs.length && msgs[msgs.length - 1].role === "assistant") msgs.pop();
   updateRoom(roomId, { messages: msgs });
-  await runGeneration(roomId);
+  await runGeneration(roomId, note);
 }
 
 /** 최근 대화에 등장한 로어북 항목 (세계관 + 등장인물) */
@@ -288,7 +337,7 @@ export function loreFor(room: Room, ctx: StoryContext): LoreHit[] {
   return matchLore(groups, recent);
 }
 
-async function runGeneration(roomId: string) {
+async function runGeneration(roomId: string, note = "") {
   const room = state.rooms[roomId];
   const s = state.settings;
   if (!room) return;
@@ -301,31 +350,37 @@ async function runGeneration(roomId: string) {
     const last = history[history.length - 1];
     history[history.length - 1] = { ...last, content: `${last.content}\n\n<참고 설정: 이번 장면과 관련된 자료. 필요한 만큼만 자연스럽게 반영하고 그대로 옮겨 쓰지 말 것>\n${formatLore(lore)}\n</참고 설정>` };
   }
+  if (note.trim()) {
+    const last = history[history.length - 1];
+    history[history.length - 1] = { ...last, content: `${last.content}\n\n<작가 지시: 이번 응답에 반영할 것>\n${note.trim()}\n</작가 지시>` };
+  }
   controller = new AbortController();
   setState({ live: { roomId, text: "", thinking: "", status: "", startedAt: Date.now(), lore } });
   const live = (p: Partial<LiveState>) => setState((st) => (st.live ? { live: { ...st.live, ...p } } : {}));
   let streamed = "";
   let ok = false;
   try {
-    const res = await generate({
-      settings: s,
-      system: buildSystemPrompt(s, room, ctx),
-      messages: history,
-      maxTokens: outputTokensFor(s),
-      signal: controller.signal,
-      onText: (d) => {
-        streamed += d;
-        live({ text: previewText(streamed), status: "" });
+    const res = await callAI(
+      "chat",
+      {
+        system: buildSystemPrompt(s, room, ctx),
+        messages: history,
+        maxTokens: outputTokensFor(s),
+        signal: controller.signal,
+        onText: (d) => {
+          streamed += d;
+          live({ text: previewText(streamed) });
+        },
+        onThinking: (d) => live({ thinking: (state.live?.thinking ?? "") + d }),
+        onStatus: (m) => live({ status: m }),
       },
-      onThinking: (d) => live({ thinking: (state.live?.thinking ?? "") + d }),
-      onStatus: (m) => live({ status: m }),
-    });
+      { onRestart: () => ((streamed = ""), live({ text: "", thinking: "" })) },
+    );
     const { text, choices } = s.choices ? splitChoices(res.text) : { text: res.text.trim(), choices: [] };
     if (!text) throw new ProviderError("AI가 빈 응답을 보냈습니다. 다시 시도해 주세요.", 0, "server");
     const cur = state.rooms[roomId];
-    const reply: Message = { id: uid("m"), role: "assistant", text, ...(choices.length ? { choices } : {}), ...(res.thinking ? { thinking: res.thinking } : {}), model: res.model, createdAt: Date.now() };
+    const reply: Message = { id: uid("m"), role: "assistant", text, ...(choices.length ? { choices } : {}), ...(res.thinking ? { thinking: res.thinking } : {}), model: res.model, ...(res.cost ? { usage: res.cost } : {}), ...(res.usedFallback ? { fallback: true } : {}), createdAt: Date.now() };
     if (cur) updateRoom(roomId, { messages: [...cur.messages, reply] });
-    setState({ lastUsage: res.usage ? { ...res.usage, model: res.model } : null });
     ok = true;
   } catch (e) {
     const err = e as Error;
@@ -358,7 +413,7 @@ export async function updateMemory(roomId: string, mode: "auto" | "manual"): Pro
   setState({ memoryJob: { roomId } });
   try {
     const req = buildMemoryRequest(s, room, pending, { user: contextFor(room).persona?.name });
-    const res = await generate({ settings: s, ...req, maxTokens: 3000 });
+    const res = await callAI("memory", { ...req, maxTokens: 3000 });
     const memory = cleanMemory(res.text);
     if (!memory) throw new Error("빈 요약이 돌아왔습니다.");
     updateRoom(roomId, { memory, memoryCursorAt: pending[pending.length - 1].createdAt, memoryUpdatedAt: Date.now() });
@@ -461,21 +516,19 @@ export async function generateOutline(novelId: string, from = 0): Promise<boolea
   let streamed = "";
   try {
     const s = state.settings;
-    const res = await generate({
-      settings: s,
+    const res = await callAI("outline", {
       ...buildOutlineRequest(s, n, contextFor(n), from),
       maxTokens: Math.min(16000, 1500 + (n.episodeCount - from) * 250),
       signal: novelController.signal,
-      onText: (d) => novelLiveSet({ text: (streamed += d), status: "" }),
+      onText: (d) => novelLiveSet({ text: (streamed += d) }),
       onThinking: (d) => novelLiveSet({ thinking: (state.novelLive?.thinking ?? "") + d }),
       onStatus: (m) => novelLiveSet({ status: m }),
-    });
+    }, { onRestart: () => ((streamed = ""), novelLiveSet({ text: "", thinking: "" })) });
     const items = parseOutline(res.text).filter((x) => x.number > from);
     if (!items.length) throw new Error("개요 형식을 읽지 못했습니다. 다시 시도해 주세요.");
     const cur = state.novels[novelId] ?? n;
     const outline = [...cur.outline.slice(0, from), ...items.slice(0, cur.episodeCount - from).map((x) => ({ id: uid("o"), title: x.title, summary: x.summary }))];
     updateNovel(novelId, { outline });
-    setState({ lastUsage: res.usage ? { ...res.usage, model: res.model } : null });
     return true;
   } catch (e) {
     if ((e as Error)?.name !== "AbortError") setState({ novelError: { novelId, message: (e as Error)?.message || String(e) } });
@@ -496,13 +549,13 @@ export async function writeEpisode(novelId: string, index: number, note = "", un
   setState({ novelLive: { novelId, task: "episode", index, until, text: "", thinking: "", status: "", startedAt: Date.now() }, novelError: null });
   void holdWake();
   let streamed = "";
-  const save = (raw: string, model: string, incomplete: boolean) => {
+  const save = (raw: string, model: string, incomplete: boolean, usage?: MessageUsage) => {
     const { text, summary } = splitEpisode(raw);
     const cur = state.novels[novelId];
     if (!cur || !text) return;
     const now = Date.now();
     const old = cur.episodes[index];
-    const ep: Episode = { id: old?.id ?? uid("e"), title: cur.outline[index]?.title ?? `${index + 1}화`, text, summary, model, ...(incomplete ? { incomplete: true } : {}), createdAt: old?.createdAt ?? now, updatedAt: now };
+    const ep: Episode = { id: old?.id ?? uid("e"), title: cur.outline[index]?.title ?? `${index + 1}화`, text, summary, model, ...(incomplete ? { incomplete: true } : {}), ...(usage ? { usage } : {}), createdAt: old?.createdAt ?? now, updatedAt: now };
     const episodes = [...cur.episodes];
     episodes[index] = ep;
     updateNovel(novelId, { episodes });
@@ -513,19 +566,17 @@ export async function writeEpisode(novelId: string, index: number, note = "", un
     const groups = [...(ctx.world ? [{ source: ctx.world.name, entries: ctx.world.lore }] : []), ...ctx.characters.map((c) => ({ source: c.name, entries: c.lore }))];
     const scan = [n.outline[index].title, n.outline[index].summary, n.episodes[index - 1]?.text.slice(-1500) ?? ""].join("\n");
     const lore = groups.length ? formatLore(matchLore(groups, scan)) : "";
-    const res = await generate({
-      settings: s,
+    const res = await callAI("episode", {
       ...buildEpisodeRequest(s, n, ctx, index, { lore, note }),
       maxTokens: EPISODE_LENGTH[n.episodeLength].tokens,
       signal: novelController.signal,
-      onText: (d) => novelLiveSet({ text: previewEpisode((streamed += d)), status: "" }),
+      onText: (d) => novelLiveSet({ text: previewEpisode((streamed += d)) }),
       onThinking: (d) => novelLiveSet({ thinking: (state.novelLive?.thinking ?? "") + d }),
       onStatus: (m) => novelLiveSet({ status: m }),
-    });
+    }, { onRestart: () => ((streamed = ""), novelLiveSet({ text: "", thinking: "" })) });
     const cut = res.stopReason === "max_tokens" || res.stopReason === "length" || res.stopReason === "MAX_TOKENS";
     if (!splitEpisode(res.text).text) throw new Error("AI가 빈 원고를 보냈습니다. 다시 시도해 주세요.");
-    save(res.text, res.model, cut);
-    setState({ lastUsage: res.usage ? { ...res.usage, model: res.model } : null });
+    save(res.text, res.model, cut, res.cost);
     return true;
   } catch (e) {
     const err = e as Error;
@@ -575,4 +626,91 @@ export function editEpisode(novelId: string, index: number, patch: Partial<Episo
 export function deleteLastEpisode(novelId: string) {
   const n = state.novels[novelId];
   if (n?.episodes.length) updateNovel(novelId, { episodes: n.episodes.slice(0, -1) });
+}
+
+export function resetUsage() {
+  setState({ usage: emptyUsage() });
+  usageDirty = true;
+  scheduleSave();
+}
+
+/* ---------------- 진단 ---------------- */
+export interface DiagnosisResult {
+  report: string;
+  directive: string;
+}
+let diagController: AbortController | null = null;
+export const stopDiagnosis = () => diagController?.abort();
+
+async function runDiagnosis(req: { system: string; messages: { role: "user" | "assistant"; content: string }[] }, onText?: (all: string) => void): Promise<DiagnosisResult> {
+  diagController = new AbortController();
+  let all = "";
+  try {
+    const res = await callAI("diagnose", { ...req, maxTokens: 3000, signal: diagController.signal, onText: (d) => onText?.((all += d)) }, { onRestart: () => onText?.((all = "")) });
+    const r = splitDiagnosis(res.text);
+    if (!r.report) throw new Error("빈 진단이 돌아왔습니다.");
+    return r;
+  } finally {
+    diagController = null;
+  }
+}
+export async function diagnoseRoom(roomId: string, onText?: (all: string) => void): Promise<DiagnosisResult> {
+  const room = state.rooms[roomId];
+  if (!room) throw new Error("이야기를 찾을 수 없습니다.");
+  const r = await runDiagnosis(buildRoomDiagnosis(state.settings, room, contextFor(room)), onText);
+  updateRoom(roomId, { lastDiagnosis: { at: Date.now(), ...r } });
+  return r;
+}
+export async function diagnoseEpisode(novelId: string, index: number, onText?: (all: string) => void): Promise<DiagnosisResult> {
+  const n = state.novels[novelId];
+  if (!n?.episodes[index]) throw new Error("회차를 찾을 수 없습니다.");
+  return runDiagnosis(buildEpisodeDiagnosis(state.settings, n, contextFor(n), index), onText);
+}
+
+/* ---------------- 책갈피 · 분기 · 되돌리기 ---------------- */
+export function setBookmark(roomId: string, msgId: string, label: string | null) {
+  const r = state.rooms[roomId];
+  if (!r) return;
+  updateRoom(roomId, {
+    messages: r.messages.map((m) => {
+      if (m.id !== msgId) return m;
+      const { bookmark: _, ...rest } = m;
+      return label === null ? rest : { ...rest, bookmark: label };
+    }),
+  });
+}
+/** 이 메시지까지를 복사한 새 이야기. 기억이 분기 시점 이후 내용을 담고 있으면 비워서 다시 정리되게 함 */
+export function branchRoom(roomId: string, msgId: string): string | null {
+  const r = state.rooms[roomId];
+  const idx = r?.messages.findIndex((m) => m.id === msgId) ?? -1;
+  if (!r || idx < 0) return null;
+  const point = r.messages[idx];
+  const keepMemory = r.memoryCursorAt !== undefined && r.memoryCursorAt <= point.createdAt;
+  const now = Date.now();
+  const room: Room = {
+    ...r,
+    id: uid("r"),
+    title: `${r.title} (분기)`,
+    messages: r.messages.slice(0, idx + 1).map((m) => ({ ...m, id: uid("m") })),
+    memory: keepMemory ? r.memory : "",
+    memoryCursorAt: keepMemory ? r.memoryCursorAt : undefined,
+    memoryUpdatedAt: keepMemory ? r.memoryUpdatedAt : undefined,
+    lastDiagnosis: undefined,
+    branchOf: { roomId: r.id, messageId: msgId, title: r.title },
+    createdAt: now,
+    updatedAt: now,
+  };
+  putRoom(room);
+  setState({ activeRoomId: room.id });
+  return room.id;
+}
+/** 이 메시지 이후를 모두 삭제 */
+export function rewindTo(roomId: string, msgId: string) {
+  const r = state.rooms[roomId];
+  const idx = r?.messages.findIndex((m) => m.id === msgId) ?? -1;
+  if (!r || idx < 0) return;
+  const kept = r.messages.slice(0, idx + 1);
+  const point = kept[kept.length - 1];
+  const stale = r.memoryCursorAt !== undefined && r.memoryCursorAt > point.createdAt;
+  updateRoom(roomId, { messages: kept, ...(stale ? { memory: "", memoryCursorAt: undefined, memoryUpdatedAt: undefined } : {}) });
 }

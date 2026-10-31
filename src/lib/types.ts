@@ -26,6 +26,19 @@ export interface Settings {
   theme: "system" | "light" | "dark";
   autoMemory: boolean; // 오래된 대화를 장기 기억으로 자동 정리
   readerFontSize: number; // 소설 읽기 글자 크기(px)
+  /** 기본 모델이 과부하·한도·서버 오류로 실패하면 이 모델로 한 번 더 시도 */
+  fallback: { enabled: boolean; provider: ProviderId; model: string };
+  monthlyBudget: number; // USD, 0 = 끔 (넘으면 경고만)
+  krwPerUsd: number; // 원화 환산 표시용
+  customPrices: Record<string, { in: number; out: number }>; // 모델별 사용자 지정 단가 (USD/100만 토큰)
+}
+
+/** 메시지·회차에 붙는 사용량 (usd: 단가를 아는 경우) */
+export interface MessageUsage {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  usd?: number;
 }
 
 export type Role = "user" | "assistant";
@@ -38,6 +51,9 @@ export interface Message {
   thinking?: string;
   error?: string;
   model?: string;
+  usage?: MessageUsage;
+  fallback?: boolean; // 대체 모델로 생성됨
+  bookmark?: string; // 책갈피 이름 ("" 도 책갈피)
   createdAt: number;
 }
 
@@ -54,6 +70,8 @@ export interface Room {
   personaId?: string;
   memoryCursorAt?: number; // 이 시각(createdAt) 이전 메시지까지 장기 기억에 반영됨
   memoryUpdatedAt?: number;
+  branchOf?: { roomId: string; messageId: string; title: string }; // 분기해 온 원래 이야기
+  lastDiagnosis?: { at: number; report: string; directive: string };
 }
 
 /* ---------------- 라이브러리: 세계관 · 등장인물 · 주인공(페르소나) ---------------- */
@@ -114,6 +132,10 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "system",
   autoMemory: true,
   readerFontSize: 18,
+  fallback: { enabled: false, provider: "gemini", model: "gemini-3.8-flash" },
+  monthlyBudget: 0,
+  krwPerUsd: 1400,
+  customPrices: {},
 };
 
 /** 저장된 설정을 기본값과 병합 (새 항목이 추가돼도 안전) */
@@ -125,11 +147,15 @@ export function normalizeSettings(raw: unknown): Settings {
     keys: { ...DEFAULT_SETTINGS.keys, ...(r.keys || {}) },
     models: { ...DEFAULT_SETTINGS.models, ...(r.models || {}) },
     style: { ...DEFAULT_SETTINGS.style, ...(r.style || {}) },
+    fallback: { ...DEFAULT_SETTINGS.fallback, ...(r.fallback || {}) },
+    customPrices: r.customPrices && typeof r.customPrices === "object" ? r.customPrices : {},
     version: 1,
   };
   // 성인 확인 없이 adult 로 저장될 수 없음
   if (s.contentRating === "adult" && !s.adultConfirmed) s.contentRating = "mature";
   s.temperature = Math.min(1, Math.max(0, Number(s.temperature) || 0));
+  s.monthlyBudget = Math.max(0, Number(s.monthlyBudget) || 0);
+  s.krwPerUsd = Math.max(0, Number(s.krwPerUsd) || 0);
   s.readerFontSize = Math.min(28, Math.max(13, Math.round(Number(s.readerFontSize) || 18)));
   s.contextMessages = Math.min(400, Math.max(4, Math.round(Number(s.contextMessages) || 40)));
   return s;
@@ -149,6 +175,7 @@ export interface Episode {
   summary: string; // 실제로 쓴 내용 요약 (다음 회차 집필 때 참고)
   model?: string;
   incomplete?: boolean; // 중단·분량 초과로 끝까지 쓰지 못함
+  usage?: MessageUsage;
   createdAt: number;
   updatedAt: number;
 }
