@@ -6,7 +6,7 @@ AI와 함께 소설·롤플레이를 써 내려가는 **브라우저 단독 실�
 **바로 사용하기** → https://soulfactorx.github.io/novel-generator/
 (또는 [Releases](https://github.com/soulfactorx/novel-generator/releases)에서 HTML 파일을 내려받아 브라우저로 열기)
 
-## 기능 (v0.5)
+## 기능 (v0.6)
 - **AI 제공업체**: Google Gemini · Anthropic Claude · OpenAI 호환(OpenRouter, OpenAI, Ollama 등 로컬 서버). 실시간 스트리밍, 자동 재시도, 중단을 지원합니다.
 - **이야기방**: 대화형 이야기 진행. 이야기 설정(세계관·인물)과 장기 기억 메모, 다음 행동 선택지, 다시 생성, 편집·삭제를 지원합니다.
 - **📖 소설 자동 집필**: 기획을 적으면 AI가 회차별 개요를 짜고, 한 화씩 또는 끝까지 연속으로 원고를 씁니다. 읽기 화면, 편집, 다시 쓰기를 지원하고 **EPUB·TXT로 내보낼** 수 있습니다.
@@ -21,6 +21,8 @@ AI와 함께 소설·롤플레이를 써 내려가는 **브라우저 단독 실�
 - **글쓰기 설정**: 시점, 분량, 전개 속도, 대사 비중, 창의성
 - **콘텐츠 수위**: 전체 이용가(기본) → 성숙 → 성인. 성인 등급은 사용자가 직접 만 19세 이상을 확인해야 선택할 수 있습니다. 어떤 등급에서도 미성년자, 비동의 성적 묘사, 실존 인물은 다루지 않으며, 각 AI 제공업체의 이용 정책이 우선합니다.
 - **데이터**: IndexedDB 저장, JSON 백업·복원, E.No.S Studio 백업 가져오기(이야기·세계관·인물·주인공·소설)
+- **🔁 RisuAI 호환**: RisuAI의 캐릭터 카드(**.charx**·**.json**·.png), 모듈(**.risum**), 로어북·채팅 **JSON**을 가져와 등장인물·세계관·로어북·이야기로 씁니다. 첫 메시지(인사말)로 바로 이야기를 시작할 수 있고, 라이브러리의 등장인물은 .charx·.json 카드로, 세계관은 .risum 모듈로 내보내 RisuAI에서 열 수 있습니다.
+- **🖼 봇 이미지**: charx 안의 에셋·감정 이미지와 봇의 정규식 스크립트를 함께 가져와, 봇에 정해진 규칙대로(`{{img::이름}}`, `<img="이름">`, `<Emotion="이름">` 등) 이야기와 소설 속에 그림이 나옵니다. 소설 EPUB에도 들어갑니다. 이미지는 이 기기에만 저장되며 동기화·백업 파일에는 포함되지 않습니다.
 
 ## API 키와 개인정보
 API 키와 이야기는 **이 브라우저 안에만** 저장됩니다. AI 요청은 브라우저에서 각 제공업체로 직접 전송되며, 이 저장소나 다른 서버를 거치지 않습니다.
@@ -44,6 +46,8 @@ npm run build      # 타입 검사 + dist/index.html (단일 파일)
 | `src/lib/lore.ts` · `memory.ts` | 로어북 매칭 · 장기 기억 정리 |
 | `src/lib/novel.ts` · `exporters.ts` | 소설 개요·회차 프롬프트 · TXT/EPUB(내장 ZIP) |
 | `src/lib/pricing.ts` · `usage.ts` · `diagnose.ts` | 단가표(기간별) · 사용량 집계 · 진단 |
+| `src/lib/risu.ts` · `unzip.ts` | RisuAI 형식 가져오기·내보내기(charx · risum · 카드 JSON/PNG · 로어북 · 채팅) · ZIP 읽기 |
+| `src/lib/images.ts` · `imageUrls.ts` | 봇 이미지: 정규식 스크립트 · 에셋 이름 찾기 · 그림 표시 · 안전한 HTML · 프롬프트 |
 | `src/lib/sync/` | 동기화: 인코딩·암호화(codec) · 병합(merge) · GitHub Gist 클라이언트 |
 | `src/lib/cover.ts` · `pwa.ts` · `public/` | 표지 생성 · 앱 설치/오프라인(manifest·서비스 워커·아이콘) |
 | `src/lib/store.ts` | 앱 상태, 저장, 생성 흐름 |
@@ -62,6 +66,11 @@ npm run build      # 타입 검사 + dist/index.html (단일 파일)
 - ~~v0.3 소설 자동 집필(개요 → 회차), 서고, TXT/EPUB 내보내기~~ ✅
 - ~~v0.4 사용량·비용 대시보드, 자동 대체 모델, 이야기 진단, 책갈피와 분기~~ ✅
 - ~~v0.5 앱 설치(PWA)·오프라인, 소설 표지, 기기 간 동기화~~ ✅
+- ~~v0.6 RisuAI 호환(charx·risum·카드·로어북·채팅), 봇 이미지·정규식·상태창~~ ✅
 
 ## 라이선스
-[MIT](LICENSE)
+[GNU AGPL-3.0](LICENSE) (AGPL-3.0-or-later) · Copyright (c) 2026 soulfactorx
+
+- 이 앱을 고쳐서 다른 사람에게 배포하거나 웹으로 서비스하면, 고친 소스도 AGPL-3.0으로 공개해야 합니다. 앱의 [⚙️ 설정 → 데이터] 맨 아래에 소스 코드 링크가 있습니다.
+- v0.5.0까지 배포된 버전은 MIT 라이선스입니다.
+- RisuAI 모듈(.risum)을 읽고 쓰는 데 쓰는 RPack 변환표는 [RisuAI](https://github.com/kwaroran/RisuAI)의 Rpack.js(MIT / AGPL-3.0 이중 라이선스)에서 왔습니다.

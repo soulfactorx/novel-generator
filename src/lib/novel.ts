@@ -64,7 +64,7 @@ export function parseOutline(text: string): { number: number; title: string; sum
 }
 
 /* ---------------- 회차 집필 ---------------- */
-export function buildNovelSystem(s: Settings, ctx: StoryContext): string {
+export function buildNovelSystem(s: Settings, ctx: StoryContext, imageRules: string[] = []): string {
   return [
     "너는 한국어 웹소설 작가다. 주어진 개요에 따라 연재 소설의 한 회차를 완성된 원고로 쓴다.",
     "",
@@ -78,10 +78,11 @@ export function buildNovelSystem(s: Settings, ctx: StoryContext): string {
     `- 대사: ${DIALOGUE[s.style.dialogue]}`,
     `- ${RATING_POLICY[s.contentRating]}`,
     ...contextSections(ctx, "novel"),
+    ...imageRules,
   ].join("\n");
 }
 
-export function buildEpisodeRequest(s: Settings, n: Novel, ctx: StoryContext, index: number, opts: { lore?: string; note?: string } = {}): { system: string; messages: ChatMessage[] } {
+export function buildEpisodeRequest(s: Settings, n: Novel, ctx: StoryContext, index: number, opts: { lore?: string; note?: string; imageRules?: string[]; instructions?: string } = {}): { system: string; messages: ChatMessage[] } {
   const o = n.outline[index];
   const len = EPISODE_LENGTH[n.episodeLength];
   const written = n.episodes.slice(0, index);
@@ -94,6 +95,7 @@ export function buildEpisodeRequest(s: Settings, n: Novel, ctx: StoryContext, in
     tail && `## 직전 회차의 마지막 부분 (여기서 자연스럽게 이어 쓸 것)\n…${tail}`,
     opts.lore && `## 참고 설정 (이번 회차와 관련된 자료, 필요한 만큼만 반영)\n${opts.lore}`,
     `## 이번에 쓸 회차: ${index + 1}화 「${o.title}」\n${o.summary}`,
+    opts.instructions?.trim() && `## 설정에 정해진 지시 (반드시 따를 것)\n${opts.instructions.trim()}`,
     opts.note?.trim() && `## 작가의 추가 요청\n${opts.note.trim()}`,
     [
       "## 지시",
@@ -104,7 +106,7 @@ export function buildEpisodeRequest(s: Settings, n: Novel, ctx: StoryContext, in
   ]
     .filter(Boolean)
     .join("\n\n");
-  return { system: buildNovelSystem(s, ctx), messages: [{ role: "user", content: user }] };
+  return { system: buildNovelSystem(s, ctx, opts.imageRules), messages: [{ role: "user", content: user }] };
 }
 
 /** 본문과 [회차 요약] 분리 */

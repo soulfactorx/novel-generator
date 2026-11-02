@@ -1,8 +1,11 @@
 import { useState, type ReactNode } from "react";
+import { downloadBlob, safeFileName } from "../lib/exporters";
+import { characterToCard, characterToCharx, worldToModule, writeRisum } from "../lib/risu";
 import { createEntity, createRoom, deleteEntity, entitiesOf, updateEntity, useApp } from "../lib/store";
 import type { Character, Entity, EntityKind, Persona, World } from "../lib/types";
 import Dialog from "./Dialog";
 import LoreEditor from "./LoreEditor";
+import { ImageGallery, RisuSettings } from "./ImageGallery";
 
 const KINDS: [EntityKind, string, string][] = [
   ["world", "세계관", "🌍"],
@@ -56,6 +59,7 @@ export default function LibraryDialog({ initialKind = "world", onClose }: { init
               {cur.kind === "persona" && <PersonaForm p={cur} />}
               <div className="flex flex-wrap gap-2 border-t border-stone-200 pt-3 dark:border-stone-800">
                 <button className="btn-primary" onClick={() => { startStory(cur, lib); onClose(); }}>✒️ 이 설정으로 새 이야기</button>
+                <RisuExport e={cur} lib={lib} />
                 <button className="btn-danger ml-auto" onClick={() => { const n = usedBy(cur.id); if (confirm(`'${cur.name}'을(를) 삭제할까요?${n ? `\n이 항목을 쓰는 이야기 ${n}개에서는 연결만 해제되고 이야기는 남습니다.` : ""}`)) { deleteEntity(cur.id); setSel(null); } }}>삭제</button>
               </div>
             </div>
@@ -63,6 +67,21 @@ export default function LibraryDialog({ initialKind = "world", onClose }: { init
         </div>
       </div>
     </Dialog>
+  );
+}
+
+/** RisuAI에서 가져올 수 있는 파일로 내보내기 (등장인물: charx·json 카드, 세계관: risum 모듈) */
+function RisuExport({ e, lib }: { e: Entity; lib: Record<string, Entity> }) {
+  if (e.kind === "persona") return null;
+  const name = safeFileName(e.name);
+  if (e.kind === "world")
+    return <button className="btn-ghost border border-stone-300 dark:border-stone-700" title="RisuAI 모듈(로어북)로 내보내기" onClick={() => downloadBlob(`${name}.risum`, writeRisum(worldToModule(e)) as BlobPart, "application/octet-stream")}>⬇ RisuAI 모듈(.risum)</button>;
+  const w = e.worldId && lib[e.worldId]?.kind === "world" ? (lib[e.worldId] as World) : undefined;
+  return (
+    <>
+      <button className="btn-ghost border border-stone-300 dark:border-stone-700" title={`RisuAI 캐릭터 카드로 내보내기${w ? " (소속 세계관 포함)" : ""}`} onClick={() => downloadBlob(`${name}.charx`, characterToCharx(e, w) as BlobPart, "application/zip")}>⬇ RisuAI 카드(.charx)</button>
+      <button className="btn-ghost border border-stone-300 dark:border-stone-700" title="Character Card V3 JSON" onClick={() => downloadBlob(`${name}.json`, JSON.stringify(characterToCard(e, w), null, 2), "application/json")}>⬇ .json</button>
+    </>
   );
 }
 
@@ -101,6 +120,8 @@ function WorldForm({ w }: { w: World }) {
         <textarea className="input min-h-20" value={w.rules} onChange={(e) => up({ rules: e.target.value })} placeholder="예) 마법에는 반드시 대가가 따른다. / 현대 외래어를 쓰지 않는다." aria-label="세계관 규칙" />
       </F>
       <LoreEditor entries={w.lore} onChange={(lore) => up({ lore })} />
+      <ImageGallery ownerId={w.id} />
+      <RisuSettings e={w} />
     </>
   );
 }
@@ -125,7 +146,12 @@ function CharacterForm({ c, worlds }: { c: Character; worlds: World[] }) {
       <F label="말투 · 대사 예시" hint="실제 대사 2~4줄을 적으면 말투가 가장 잘 유지됩니다.">
         <textarea className="input min-h-24" value={c.speech} onChange={(e) => up({ speech: e.target.value })} placeholder={'"규정은 규정입니다. 예외는 없어요."\n"…그래도, 오늘은 못 본 걸로 하죠."'} aria-label="말투 예시" />
       </F>
+      <F label="응답 직전 지시 (선택)" hint="AI가 응답(소설은 회차)을 쓰기 직전에 매번 전달됩니다. 상태창 형식, 그림 표시 규칙처럼 꼭 지켜야 하는 출력 규칙을 적습니다. RisuAI 카드의 post_history_instructions가 여기로 들어옵니다.">
+        <textarea className="input min-h-20" value={c.instructions ?? ""} onChange={(e) => up({ instructions: e.target.value })} aria-label="응답 직전 지시" />
+      </F>
       <LoreEditor entries={c.lore} onChange={(lore) => up({ lore })} />
+      <ImageGallery ownerId={c.id} />
+      <RisuSettings e={c} />
     </>
   );
 }

@@ -112,3 +112,58 @@ test("data tab shows sync and install sections", async () => {
   expect(document.body.textContent).toContain("앱으로 설치");
   expect((byText("연결하고 동기화") as HTMLButtonElement).disabled).toBe(true); // 토큰 없으면 비활성
 });
+
+test("data tab imports a RisuAI character card and starts a story from its greeting", async () => {
+  const store = await import("../src/lib/store");
+  const card = { spec: "chara_card_v3", spec_version: "3.0", data: { name: "리스", description: "{{char}}는 마녀다.", first_mes: "어서 와, {{user}}.", alternate_greetings: ["또 왔네."], character_book: { entries: [{ keys: ["숲"], content: "검은 숲", enabled: true }] } } };
+  const input = [...document.querySelectorAll('input[type="file"]')].find((i) => (i as HTMLInputElement).accept.includes(".charx")) as HTMLInputElement;
+  Object.defineProperty(input, "files", { value: [new File([JSON.stringify(card)], "리스.json", { type: "application/json" })], configurable: true });
+  await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
+  await wait(50);
+  expect(document.body.textContent).toContain("캐릭터 카드(V3)");
+  expect(document.body.textContent).toContain("로어북 1개");
+  await act(async () => [...document.querySelectorAll("button")].find((b) => b.textContent === "가져오기")!.click());
+  expect(document.body.textContent).toContain("등장인물 1명, 이야기 1개");
+  const s = store.getState();
+  const c = Object.values(s.library).find((e) => e.name === "리스")!;
+  expect(c.kind).toBe("character");
+  const room = s.rooms[s.activeRoomId!];
+  expect(room.characterIds).toEqual([c.id]);
+  expect(room.messages[0].text).toBe("어서 와, 주인공.");
+});
+
+test("RisuAI card images: greeting with <img=\"…\"> is turned into the bot's picture by its display script", async () => {
+  const store = await import("../src/lib/store");
+  let n = 0;
+  (URL as any).createObjectURL = () => `blob:test/${++n}`;
+  (URL as any).revokeObjectURL = () => {};
+  const png = "data:image/png;base64," + btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0));
+  const card = {
+    spec: "chara_card_v3", spec_version: "3.0",
+    data: {
+      name: "하루", description: "장면이 바뀌면 <img=\"장소\">를 쓴다.", first_mes: "항구에 도착했다.\n<img=\"harbor\">\n<script>alert(1)</script><b onclick=\"x()\">끝</b>",
+      assets: [{ type: "x-risu-asset", uri: png, name: "Harbor", ext: "png" }, { type: "x-risu-asset", uri: png, name: "Harbor", ext: "png" }],
+      extensions: { risuai: { customScripts: [{ comment: "그림", in: "<img=\"(.+?)\">", out: "{{img::$1}}", type: "editdisplay" }] } },
+    },
+  };
+  const input = [...document.querySelectorAll('input[type="file"]')].find((i) => (i as HTMLInputElement).accept.includes(".charx")) as HTMLInputElement;
+  Object.defineProperty(input, "files", { value: [new File([JSON.stringify(card)], "하루.json")], configurable: true });
+  await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
+  await wait(50);
+  expect(document.body.textContent).toContain("이미지 2장");
+  expect(document.body.textContent).toContain("정규식 스크립트 1개");
+  await act(async () => [...document.querySelectorAll("button")].find((b) => b.textContent === "가져오기")!.click());
+  await wait(100);
+  expect(document.body.textContent).toContain("이미지 2장");
+  const imgs = Object.values(store.getState().images);
+  expect(imgs.map((m) => m.name).sort()).toEqual(["Harbor", "Harbor_2"]); // 이름이 겹치면 _2
+  await act(async () => (document.querySelector('[aria-label="닫기"]') as HTMLButtonElement).click());
+  await wait(100);
+  const msg = document.querySelector(".risu-html")!;
+  expect(msg).toBeTruthy();
+  await wait(200);
+  expect(document.querySelector(".risu-html")!.querySelector("img")?.getAttribute("src")).toMatch(/^blob:test\//);
+  expect(msg.innerHTML).not.toContain("script");
+  expect(msg.innerHTML).not.toContain("onclick");
+  expect(msg.textContent).toContain("항구에 도착했다.");
+});

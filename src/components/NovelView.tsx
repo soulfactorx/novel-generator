@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { downloadBlob, novelToEpub, novelToTxt, safeFileName } from "../lib/exporters";
+import { downloadBlob, novelToEpub, novelToTxt, safeFileName, type ExportImages } from "../lib/exporters";
 import { charCount, EPISODE_LENGTH } from "../lib/novel";
 import { uid } from "../lib/id";
 import DiagnosisDialog from "./DiagnosisDialog";
 import { formatUsd } from "../lib/pricing";
-import { deleteLastEpisode, diagnoseEpisode, dismissNovelError, getState, editEpisode, generateOutline, stopNovel, updateNovel, updateSettings, useApp, writeEpisode, writeEpisodes } from "../lib/store";
+import { contextFor, loadImageData, poolFor, deleteLastEpisode, diagnoseEpisode, dismissNovelError, getState, editEpisode, generateOutline, stopNovel, updateNovel, updateSettings, useApp, writeEpisode, writeEpisodes } from "../lib/store";
 import type { EpisodeLength, Novel } from "../lib/types";
 import CastPicker from "./CastPicker";
 import CoverPanel from "./CoverPanel";
-import { StoryText } from "./Message";
+import RisuText from "./RisuText";
+import { htmlToBlocks, imagePool, renderRisu, type ImagePool } from "../lib/images";
 
 type Tab = "plan" | "outline" | "manuscript";
 
@@ -212,7 +213,7 @@ function ManuscriptTab({ novel: n, live, busy, onRead, onOutline, onOpenSettings
       {live ? (
         <div className="space-y-3 border-t border-stone-200 pt-4 dark:border-stone-800">
           <LiveHeader label={`${live.index + 1}화 「${n.outline[live.index]?.title ?? ""}」 집필 중${live.until !== undefined && live.until > live.index ? ` (${live.until + 1}화까지 연속)` : ""}`} live={live} />
-          {live.text ? <StoryText text={live.text} /> : live.thinking && <div className="line-clamp-4 text-xs italic text-stone-500">{live.thinking.slice(-400)}</div>}
+          {live.text ? <RisuText text={live.text} pool={poolFor(n)} /> : live.thinking && <div className="line-clamp-4 text-xs italic text-stone-500">{live.thinking.slice(-400)}</div>}
           <div ref={endRef} />
         </div>
       ) : (
@@ -237,6 +238,9 @@ function ManuscriptTab({ novel: n, live, busy, onRead, onOutline, onOpenSettings
 function Reader({ novel: n, index, busy, onIndex, onClose }: { novel: Novel; index: number; busy: boolean; onIndex: (i: number) => void; onClose: () => void }) {
   const e = n.episodes[index];
   const fontSize = useApp((s) => s.settings.readerFontSize);
+  const lib = useApp((s) => s.library);
+  const images = useApp((s) => s.images);
+  const pool = imagePool(contextFor(n, lib), images);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(e.text);
   const [rewrite, setRewrite] = useState<string | null>(null);
@@ -267,7 +271,7 @@ function Reader({ novel: n, index, busy, onIndex, onClose }: { novel: Novel; ind
           </div>
         </div>
       ) : (
-        <div style={{ fontSize }}><StoryText text={e.text} /></div>
+        <div style={{ fontSize }}><RisuText text={e.text} pool={pool} /></div>
       )}
       {diag && <DiagnosisDialog title={`🩺 ${index + 1}화 진단`} run={(onText) => diagnoseEpisode(n.id, index, onText)} applyLabel="진단 반영해 다시 쓰기" canApply={!busy} onApply={(d) => setRewrite(d)} onClose={() => setDiag(false)} />}
       {e.summary && !editing && <details className="hint"><summary className="cursor-pointer">이 회차 요약 (다음 회차 집필에 사용)</summary><textarea className="input mt-2 min-h-20 text-xs" value={e.summary} onChange={(x) => editEpisode(n.id, index, { summary: x.target.value })} aria-label="회차 요약" /></details>}
@@ -307,11 +311,26 @@ function ExportMenu({ novel: n }: { novel: Novel }) {
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div className="absolute right-0 z-20 mt-1 w-52 rounded-xl border border-stone-200 bg-white p-1 shadow-lg dark:border-stone-800 dark:bg-stone-900">
-            <button className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-stone-100 dark:hover:bg-stone-800" onClick={() => { downloadBlob(`${name}.epub`, novelToEpub(n) as BlobPart, "application/epub+zip"); setOpen(false); }}>📚 EPUB (전자책)</button>
-            <button className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-stone-100 dark:hover:bg-stone-800" onClick={() => { downloadBlob(`${name}.txt`, novelToTxt(n), "text/plain;charset=utf-8"); setOpen(false); }}>📄 TXT (텍스트)</button>
+            <button className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-stone-100 dark:hover:bg-stone-800" onClick={() => { setOpen(false); void exportImages(poolFor(n), n).then((ex) => downloadBlob(`${name}.epub`, novelToEpub(n, new Date(), ex) as BlobPart, "application/epub+zip")); }}>📚 EPUB (전자책)</button>
+            <button className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-stone-100 dark:hover:bg-stone-800" onClick={() => { setOpen(false); void exportImages(poolFor(n), n, false).then((ex) => downloadBlob(`${name}.txt`, novelToTxt(n, ex), "text/plain;charset=utf-8")); }}>📄 TXT (텍스트)</button>
           </div>
         </>
       )}
     </div>
   );
+}
+
+/** 내보내기용: 봇의 표시 스크립트·그림 표시를 반영해 문단·그림으로 나누고, 쓰인 그림의 바이트를 읽는다 */
+async function exportImages(pool: ImagePool, n: Novel, withBytes = true): Promise<ExportImages | undefined> {
+  if (!pool.assets.length && !pool.emotions.length && !pool.scripts.length) return undefined;
+  const ids = new Set<string>();
+  n.episodes.forEach((e) => renderRisu(e.text, pool).ids.forEach((id) => ids.add(id)));
+  const images: ExportImages["images"] = {};
+  const metas = getState().images;
+  if (withBytes)
+    for (const id of ids) {
+      const bytes = await loadImageData(id).catch(() => null);
+      if (bytes && metas[id]) images[id] = { bytes, mime: metas[id].mime };
+    }
+  return { blocks: (text) => htmlToBlocks(renderRisu(text, pool).html), images };
 }

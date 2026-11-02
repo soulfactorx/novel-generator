@@ -1,11 +1,12 @@
 import { useRef, useState, type ReactNode } from "react";
 import { backupLibrary, backupNovels, download, isOwnBackup, makeBackup } from "../lib/backup";
 import { parseLegacyBackup, type LegacyImport } from "../lib/importLegacy";
+import { parseRisuFile, parseRisuJson, type RisuImport } from "../lib/risu";
 import { listModels } from "../lib/modelList";
 import { testConnection } from "../lib/providers";
 import { CLAUDE_MODELS, GEMINI_MODELS, OPENAI_PRESETS, PROVIDER_LABEL } from "../lib/providers/catalog";
 import { RATING_POLICY } from "../lib/prompt";
-import { getState, importLegacy, importLegacyExtra, updateSettings, upsertLibrary, upsertNovels, upsertRooms, useApp } from "../lib/store";
+import { getState, importLegacy, importLegacyExtra, importRisu, updateSettings, upsertLibrary, upsertNovels, upsertRooms, useApp } from "../lib/store";
 import type { ContentRating, ProviderId, Room, Settings, StyleOptions } from "../lib/types";
 import Dialog from "./Dialog";
 import UsageTab from "./UsageTab";
@@ -225,9 +226,33 @@ function DataTab() {
   const [pending, setPending] = useState<LegacyImport | null>(null);
   const [importKeys, setImportKeys] = useState(true);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [risu, setRisu] = useState<RisuImport | null>(null);
+  const [greet, setGreet] = useState(0); // -1: 이야기 만들지 않음
   const onFile = async (f: File) => {
+    setMsg(null);
+    setPending(null);
+    setRisu(null);
     try {
-      const j = JSON.parse(await f.text());
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      let j: unknown;
+      if (!/\.(charx|risum|png|jpe?g)$/i.test(f.name)) {
+        try {
+          j = JSON.parse(new TextDecoder().decode(bytes));
+        } catch {
+          /* JSON이 아니면 RisuAI 바이너리로 시도 */
+        }
+      }
+      if (j === undefined) {
+        setRisu(await parseRisuFile(f.name, bytes));
+        setGreet(0);
+        return;
+      }
+      const r = parseRisuJson(j);
+      if (r) {
+        setRisu(r);
+        setGreet(0);
+        return;
+      }
       if (isOwnBackup(j)) {
         const lib = backupLibrary(j);
         upsertLibrary(lib);
@@ -253,8 +278,8 @@ function DataTab() {
       </div>
       <div className="card space-y-2">
         <div className="font-bold">📥 백업 가져오기</div>
-        <p className="hint">이 앱의 백업 파일, 또는 E.No.S Studio의 백업 파일(전체 백업·자동 백업)을 가져올 수 있습니다. 기존 이야기는 지워지지 않습니다.</p>
-        <input ref={fileRef} type="file" accept=".json,application/json" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }} />
+        <p className="hint">이 앱의 백업 파일, E.No.S Studio의 백업 파일(전체 백업·자동 백업), <b>RisuAI 파일</b>(캐릭터 카드 .charx·.json·.png, 모듈 .risum, 로어북·채팅 .json)을 가져올 수 있습니다. 기존 이야기는 지워지지 않습니다.</p>
+        <input ref={fileRef} type="file" accept=".json,application/json,.charx,.risum,.png,.jpg,.jpeg" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }} />
         <button className="btn-ghost border border-stone-300 dark:border-stone-700" onClick={() => fileRef.current?.click()}>파일 선택</button>
         {pending && (
           <div className="space-y-2 rounded-lg bg-violet-50 p-3 text-sm dark:bg-violet-950/40">
@@ -266,6 +291,15 @@ function DataTab() {
             </div>
           </div>
         )}
+        {risu && <RisuPreview data={risu} greet={greet} setGreet={setGreet} onCancel={() => setRisu(null)} onImport={async () => {
+          const data = risu;
+          setRisu(null);
+          setMsg({ ok: true, text: data.images.length ? `⏳ 이미지 ${data.images.length}장을 저장하는 중…` : "⏳ 가져오는 중…" });
+          const res = await importRisu(data, greet >= 0 && data.greeting ? { greeting: greet } : {});
+          const c = data.library.filter((e) => e.kind === "character").length, w = data.library.filter((e) => e.kind === "world").length;
+          const made = data.rooms.length + (greet >= 0 && data.greeting ? 1 : 0);
+          setMsg({ ok: true, text: `✅ ${[c && `등장인물 ${c}명`, w && `세계관 ${w}개`, res.images && `이미지 ${res.images}장`, made && `이야기 ${made}개`].filter(Boolean).join(", ")}을(를) 가져왔습니다.` });
+        }} />}
         {legacyExtra && (
           <div className="space-y-2 rounded-lg bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
             <div>이전 버전에서 가져올 때 보관해 둔 E.No.S 세계관·캐릭터가 있습니다.</div>
@@ -273,6 +307,52 @@ function DataTab() {
           </div>
         )}
         {msg && <p className={`text-sm font-semibold ${msg.ok ? "text-emerald-600" : "text-rose-600"}`}>{msg.text}</p>}
+      </div>
+      <p className="hint text-center">
+        Novel Generator · <a className="underline" href="https://github.com/soulfactorx/novel-generator" target="_blank" rel="noreferrer">소스 코드</a> · <a className="underline" href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noreferrer">AGPL-3.0</a>
+      </p>
+    </div>
+  );
+}
+
+function RisuPreview({ data, greet, setGreet, onImport, onCancel }: { data: RisuImport; greet: number; setGreet: (n: number) => void; onImport: () => void; onCancel: () => void }) {
+  const lore = data.library.reduce((n, e) => n + (e.kind === "persona" ? 0 : e.lore.length), 0);
+  const scripts = data.library.reduce((n, e) => n + (e.kind === "persona" ? 0 : e.scripts?.length ?? 0), 0);
+  const emo = data.images.filter((x) => x.kind === "emotion").length;
+  const emotionMode = data.library.some((e) => e.kind === "character" && e.emotionMode);
+  const names = data.library.map((e) => e.name).join(", ");
+  const g = data.greeting;
+  return (
+    <div className="space-y-2 rounded-lg bg-violet-50 p-3 text-sm dark:bg-violet-950/40">
+      <div>
+        <b>{data.source}</b>
+        {names && <> · {names}</>}
+        {data.library.some((e) => e.kind === "character") && " → 등장인물"}
+        {data.library.some((e) => e.kind === "world") && " → 세계관"}
+        {lore > 0 && <> · 로어북 <b>{lore}</b>개</>}
+        {data.rooms.length > 0 && <> · 대화 <b>{data.rooms.length}</b>개 → 이야기 (메시지 {data.rooms.reduce((n, r) => n + r.messages.length, 0)}개)</>}
+      </div>
+      {(data.images.length > 0 || scripts > 0) && (
+        <div>
+          🖼 이미지 <b>{data.images.length}</b>장{emo > 0 && <> (감정 이미지 {emo}장{emotionMode && " · 응답마다 감정 이미지 표시"})</>}
+          {scripts > 0 && <> · 정규식 스크립트 <b>{scripts}</b>개</>}
+          <p className="hint">봇에 정해진 규칙대로 이야기·소설에서 그림이 나옵니다. 이미지는 이 기기에만 저장되고 동기화되지 않습니다.</p>
+        </div>
+      )}
+      {g && (
+        <label className="block">
+          <span className="label">첫 메시지로 새 이야기 시작</span>
+          <select className="input" value={greet} onChange={(e) => setGreet(Number(e.target.value))} aria-label="첫 메시지">
+            <option value={-1}>이야기는 만들지 않고 라이브러리에만 추가</option>
+            {g.greetings.map((t, i) => <option key={i} value={i}>{i === 0 ? "기본 인사말" : `다른 인사말 ${i}`}: {t.replace(/\s+/g, " ").slice(0, 50)}</option>)}
+          </select>
+        </label>
+      )}
+      {data.skipped.length > 0 && <p className="hint">이 앱에서 쓰지 않아 가져오지 않는 것: {data.skipped.join(", ")}</p>}
+      <p className="hint">{"{{char}}"}는 캐릭터 이름으로, {"{{user}}"}는 '주인공'으로 바꿉니다. 그 밖의 RisuAI 전용 문법({"{{getvar::…}}"}, 조건문 등)과 트리거·Lua는 지원하지 않습니다.</p>
+      <div className="flex gap-2">
+        <button className="btn-primary" onClick={onImport}>가져오기</button>
+        <button className="btn-ghost" onClick={onCancel}>취소</button>
       </div>
     </div>
   );
