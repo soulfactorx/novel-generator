@@ -32,3 +32,8 @@ body {
   font-family: "Pretendard", "Noto Sans KR", system-ui, sans-serif;
 }
 .story { font-family: "Noto Serif KR", "Nanum Myeongjo", serif; line-height: 1.9; word-break: keep-all; overflow-wrap: anywhere; }
+/* RisuAI 봇의 그림·표시 HTML */
+.risu-html img { display: block; max-width: min(100%, 32rem); max-height: 70vh; margin: 0.75rem auto; border-radius: 0.75rem; object-fit: contain; }
+.risu-html table { border-collapse: collapse; }
+.risu-html td, .risu-html th { border: 1px solid rgb(120 113 108 / 0.3); padding: 0.25rem 0.5rem; }
+.risu-html details { margin: 0.5rem 0; }

@@ -97,6 +97,7 @@ export interface World extends EntityBase {
   description: string; // 배경·시대·분위기
   rules: string; // 이 세계에서 지켜야 할 규칙·문체 지시
   lore: LoreEntry[];
+  scripts?: RegexScript[]; // RisuAI 모듈의 정규식 스크립트
 }
 export interface Character extends EntityBase {
   kind: "character";
@@ -105,12 +106,35 @@ export interface Character extends EntityBase {
   speech: string; // 말투·대사 예시
   lore: LoreEntry[];
   worldId?: string; // 소속 세계관 (선택)
+  scripts?: RegexScript[]; // RisuAI 캐릭터의 정규식 스크립트
+  emotionMode?: boolean; // RisuAI '감정 이미지' 화면: AI가 응답마다 <Emotion="이름">으로 감정 이미지를 고름
 }
 export interface Persona extends EntityBase {
   kind: "persona";
   profile: string; // 사용자가 연기하는 주인공
 }
 export type Entity = World | Character | Persona;
+
+/** 등장인물·세계관에 딸린 이미지 (RisuAI 에셋·감정 이미지). 바이트는 IndexedDB imageData에 따로 저장하고 동기화하지 않음 */
+export interface ImageMeta {
+  id: string;
+  ownerId: string; // 등장인물 또는 세계관 id
+  name: string; // {{img::이름}} 등으로 부르는 이름
+  kind: "icon" | "emotion" | "asset";
+  mime: string;
+  size: number;
+  createdAt: number;
+  updatedAt: number;
+}
+/** RisuAI 정규식 스크립트 (editinput · editoutput · editprocess · editdisplay) */
+export interface RegexScript {
+  comment: string;
+  in: string;
+  out: string;
+  type: string;
+  flag?: string;
+  ableFlag?: boolean;
+}
 export type EntityKind = Entity["kind"];
 
 export function normalizeRoom(raw: Room): Room {

@@ -7,7 +7,8 @@
  */
 import { zip } from "./exporters";
 import { uid } from "./id";
-import type { Character, Entity, LoreEntry, Message, Room, World } from "./types";
+import { fillAssetLists } from "./images";
+import type { Character, Entity, ImageMeta, LoreEntry, Message, RegexScript, Room, World } from "./types";
 import { findZip, listZip } from "./unzip";
 
 type Any = Record<string, any>;
@@ -24,9 +25,10 @@ const RPACK_DECODE = (() => {
   return d;
 })();
 const rpack = (data: Uint8Array, map: Uint8Array) => data.map((b) => map[b]);
+export const rpackEncode = (data: Uint8Array) => rpack(data, RPACK_ENCODE);
 
-/** .risum → 모듈 JSON (에셋은 개수만 센다) */
-export function readRisum(b: Uint8Array): { module: Any; assets: number } {
+/** .risum → 모듈 JSON + 에셋 바이트(모듈의 assets[i] 순서) */
+export function readRisum(b: Uint8Array): { module: Any; assets: number; assetData: Uint8Array[] } {
   if (b.length < 6 || b[0] !== 111) throw new Error("RisuAI 모듈(.risum) 파일이 아닙니다.");
   if (b[1] !== 0) throw new Error("지원하지 않는 .risum 버전입니다.");
   const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
@@ -35,12 +37,13 @@ export function readRisum(b: Uint8Array): { module: Any; assets: number } {
   const main = JSON.parse(new TextDecoder().decode(rpack(b.subarray(6, 6 + len), RPACK_DECODE)));
   if (main?.type !== "risuModule" || !main.module) throw new Error("RisuAI 모듈 데이터가 아닙니다.");
   let p = 6 + len;
-  let assets = 0;
-  while (p < b.length && b[p] === 1) {
-    p += 5 + view.getUint32(p + 1, true);
-    assets++;
+  const assetData: Uint8Array[] = [];
+  while (p + 5 <= b.length && b[p] === 1) {
+    const n = view.getUint32(p + 1, true);
+    assetData.push(rpack(b.subarray(p + 5, p + 5 + n), RPACK_DECODE));
+    p += 5 + n;
   }
-  return { module: main.module, assets };
+  return { module: main.module, assets: assetData.length, assetData };
 }
 
 export function writeRisum(module: Any): Uint8Array {
@@ -119,29 +122,97 @@ export interface RisuImport {
   library: Entity[];
   rooms: Room[];
   greeting?: RisuGreeting; // 첫 메시지로 이야기를 시작할 수 있음
+  images: RisuImage[]; // 에셋·감정 이미지 (가져올 때 읽음)
   skipped: string[]; // 가져오지 않은 것
 }
+/** 가져올 이미지: 바이트는 가져오기를 누를 때 읽는다 (charx 안의 파일 등) */
+export interface RisuImage {
+  ownerId: string;
+  name: string;
+  kind: ImageMeta["kind"];
+  load: () => Promise<Uint8Array | null> | Uint8Array | null;
+}
+/** 에셋 주소(embeded:// · __asset: · data: · ccdefault:)를 바이트로 읽는 함수 */
+type AssetLoader = (uri: string) => Promise<Uint8Array | null> | Uint8Array | null;
+const IMAGE_EXT = /^(png|jpe?g|webp|gif|avif|unknown|)$/i;
 
-function skippedOf(m: Any, assets = 0): string[] {
+function dataUri(uri: string): Uint8Array | null {
+  const m = /^data:[^,]*;base64,(.*)$/s.exec(uri);
+  if (!m) return null;
+  try {
+    return Uint8Array.from(atob(m[1]), (c) => c.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
+const b64 = (s: string) => {
+  try {
+    return Uint8Array.from(atob(s.trim()), (c) => c.charCodeAt(0));
+  } catch {
+    return null;
+  }
+};
+
+function toScripts(list: unknown): RegexScript[] {
+  return arr(list)
+    .filter((s) => typeof s.in === "string" && s.in && typeof s.type === "string")
+    .map((s) => ({ comment: str(s.comment), in: s.in, out: str(s.out), type: s.type, ...(s.flag ? { flag: str(s.flag) } : {}), ...(s.ableFlag ? { ableFlag: true } : {}) }));
+}
+
+function skippedOf(m: Any, other = 0): string[] {
   const out: string[] = [];
   const n = (v: unknown) => (Array.isArray(v) ? v.length : 0);
-  if (n(m.regex) || n(m.customScripts)) out.push(`정규식 스크립트 ${n(m.regex) + n(m.customScripts)}개`);
-  if (n(m.trigger) || n(m.triggerscript)) out.push(`트리거 ${n(m.trigger) + n(m.triggerscript)}개`);
+  if (n(m.trigger) || n(m.triggerscript)) out.push(`트리거 스크립트 ${n(m.trigger) + n(m.triggerscript)}개`);
   if (str(m.cjs).trim()) out.push("모듈 스크립트");
   if (str(m.backgroundEmbedding).trim() || str(m.backgroundHTML).trim()) out.push("배경 HTML");
-  if (assets) out.push(`이미지·에셋 ${assets}개`);
+  if (other) out.push(`그림이 아닌 에셋(음악·영상 등) ${other}개`);
   return out;
 }
 
-function moduleToWorld(m: Any, assets: number, source: string): RisuImport {
+function moduleToWorld(m: Any, source: string, assetData: Uint8Array[] = []): RisuImport {
   const name = str(m.name).trim() || "RisuAI 모듈";
-  const lore = fromRisuLore(m.lorebook, name);
   const now = Date.now();
-  const world: World = { kind: "world", id: uid("w"), name, description: fillMacros(str(m.description), name), rules: "", lore, createdAt: now, updatedAt: now };
-  return { source, library: [world], rooms: [], skipped: skippedOf(m, assets) };
+  const id = uid("w");
+  const list = (Array.isArray(m.assets) ? m.assets : []) as unknown[][];
+  const images: RisuImage[] = [];
+  let other = 0;
+  list.forEach((a, i) => {
+    if (!Array.isArray(a) || !assetData[i]?.length) return;
+    if (!IMAGE_EXT.test(str(a[2]))) return void other++;
+    images.push({ ownerId: id, name: str(a[0]) || `asset_${i + 1}`, kind: "asset", load: () => assetData[i] });
+  });
+  const names = images.map((x) => x.name);
+  const fix = (t: string) => fillAssetLists(fillMacros(t, name), names, []);
+  const lore = fromRisuLore(m.lorebook, name).map((l) => ({ ...l, content: fillAssetLists(l.content, names, []) }));
+  const scripts = toScripts(m.regex);
+  const world: World = { kind: "world", id, name, description: fix(str(m.description)), rules: "", lore, ...(scripts.length ? { scripts } : {}), createdAt: now, updatedAt: now };
+  return { source, library: [world], rooms: [], images, skipped: skippedOf(m, other) };
 }
 
-function cardToCharacter(cardIn: Any, source: string, moduleLore?: { module: Any; assets: number }, assetCount = 0): RisuImport {
+/** 카드의 이미지 목록: V3 data.assets, V2 RisuAI 확장(emotions · additionalAssets) */
+function cardImages(card: Any, ownerId: string, load: AssetLoader): { images: RisuImage[]; other: number } {
+  const images: RisuImage[] = [];
+  let other = 0;
+  const add = (name: string, kind: ImageMeta["kind"], uri: string) => images.push({ ownerId, name, kind, load: () => load(uri) });
+  for (const a of arr(card.assets)) {
+    const uri = str(a.uri);
+    if (!uri) continue;
+    if (!IMAGE_EXT.test(str(a.ext))) {
+      other++;
+      continue;
+    }
+    const type = str(a.type);
+    add(str(a.name) || (type === "icon" ? "main" : "image"), type === "emotion" ? "emotion" : type === "icon" ? "icon" : "asset", uri);
+  }
+  const risu: Any = card.extensions?.risuai || {};
+  if (!arr(card.assets).length) {
+    for (const e of Array.isArray(risu.emotions) ? risu.emotions : []) if (Array.isArray(e) && e[1]) add(str(e[0]), "emotion", str(e[1]).startsWith("__asset:") ? str(e[1]) : `data:image/png;base64,${str(e[1])}`);
+    for (const e of Array.isArray(risu.additionalAssets) ? risu.additionalAssets : []) if (Array.isArray(e) && e[1]) IMAGE_EXT.test(str(e[2])) ? add(str(e[0]), "asset", str(e[1])) : other++;
+  }
+  return { images, other };
+}
+
+function cardToCharacter(cardIn: Any, source: string, moduleLore?: { module: Any; assetData?: Uint8Array[] }, load: AssetLoader = dataUri): RisuImport {
   const card = cardIn.spec === "chara_card_v2" || cardIn.spec === "chara_card_v3" ? cardIn.data || {} : cardIn; // V1은 최상위에 필드가 있음
   const name = (str(card.name) || str(card.char_name)).trim() || "이름 없는 캐릭터";
   const f = (k: string) => fillMacros(str(card[k]), name);
@@ -156,12 +227,25 @@ function cardToCharacter(cardIn: Any, source: string, moduleLore?: { module: Any
   const lore = modLore.length ? modLore : fromCardLore(card.character_book?.entries, name);
   const now = Date.now();
   const tags = strs(card.tags).slice(0, 5);
-  const ch: Character = { kind: "character", id: uid("c"), name, summary: str(card.nickname).trim() || tags.join(" · "), profile, speech, lore, createdAt: now, updatedAt: now };
-  const greetings = [str(card.first_mes) || str(card.char_greeting), ...strs(card.alternate_greetings)].map((g) => fillMacros(g, name)).filter(Boolean);
+  const id = uid("c");
   const risu: Any = card.extensions?.risuai || {};
-  const skipped = skippedOf({ ...risu, ...(moduleLore?.module || {}) }, assetCount + (moduleLore?.assets || 0));
+  const { images, other } = cardImages(card, id, load);
+  const assetNames = images.filter((x) => x.kind === "asset").map((x) => x.name); // RisuAI의 {{assetlist}} 처럼 대표 이미지는 빼고
+  const emoNames = images.filter((x) => x.kind === "emotion").map((x) => x.name);
+  const fix = (t: string) => fillAssetLists(t, assetNames, emoNames);
+  // charx: 정규식 스크립트는 module.risum 으로 옮겨져 있음
+  const scripts = [...toScripts(risu.customScripts), ...toScripts(moduleLore?.module.regex)];
+  const ch: Character = {
+    kind: "character", id, name, summary: str(card.nickname).trim() || tags.join(" · "), profile: fix(profile), speech: fix(speech),
+    lore: lore.map((l) => ({ ...l, content: fix(l.content) })),
+    ...(scripts.length ? { scripts } : {}),
+    ...(risu.viewScreen === "emotion" && emoNames.length ? { emotionMode: true } : {}),
+    createdAt: now, updatedAt: now,
+  };
+  const greetings = [str(card.first_mes) || str(card.char_greeting), ...strs(card.alternate_greetings)].map((g) => fix(fillMacros(g, name))).filter(Boolean);
+  const skipped = skippedOf({ ...risu, ...(moduleLore?.module || {}) }, other);
   if (str(card.system_prompt).trim() || str(card.post_history_instructions).trim()) skipped.unshift("시스템 프롬프트");
-  return { source, library: [ch], rooms: [], ...(greetings.length ? { greeting: { characterId: ch.id, name, greetings } } : {}), skipped };
+  return { source, library: [ch], rooms: [], images, ...(greetings.length ? { greeting: { characterId: ch.id, name, greetings } } : {}), skipped };
 }
 
 function chatsToRooms(j: Any): RisuImport {
@@ -178,32 +262,32 @@ function chatsToRooms(j: Any): RisuImport {
     })
     .filter((r) => r.messages.length);
   if (!rooms.length) throw new Error("가져올 대화가 없습니다.");
-  return { source: "RisuAI 채팅", library: [], rooms, skipped: [] };
+  return { source: "RisuAI 채팅", library: [], rooms, images: [], skipped: [] };
 }
 
 /** JSON 객체를 판별해 변환 (RisuAI 형식이 아니면 null) */
 export function parseRisuJson(j: unknown): RisuImport | null {
   if (!j || typeof j !== "object" || Array.isArray(j)) return null;
   const o = j as Any;
-  if (o.spec === "chara_card_v2" || o.spec === "chara_card_v3") return cardToCharacter(o, o.spec === "chara_card_v3" ? "캐릭터 카드(V3)" : "캐릭터 카드(V2)", undefined, arr(o.data?.assets).filter((a) => a.type !== "icon").length);
-  if (o.type === "risuModule") return moduleToWorld(o.module && typeof o.module === "object" ? o.module : o, 0, "RisuAI 모듈");
-  if (o.type === "risu" && Array.isArray(o.data)) return moduleToWorld({ name: str(o.name) || "가져온 로어북", description: str(o.description), lorebook: o.data }, 0, "RisuAI 로어북");
+  if (o.spec === "chara_card_v2" || o.spec === "chara_card_v3") return cardToCharacter(o, o.spec === "chara_card_v3" ? "캐릭터 카드(V3)" : "캐릭터 카드(V2)");
+  if (o.type === "risuModule") return moduleToWorld(o.module && typeof o.module === "object" ? o.module : o, "RisuAI 모듈");
+  if (o.type === "risu" && Array.isArray(o.data)) return moduleToWorld({ name: str(o.name) || "가져온 로어북", description: str(o.description), lorebook: o.data }, "RisuAI 로어북");
+  if (o.type === "regex" && Array.isArray(o.data)) return moduleToWorld({ name: str(o.name) || "가져온 정규식", description: str(o.description), regex: o.data }, "RisuAI 정규식");
   if ((o.type === "risuChat" || o.type === "risuAllChats") && o.data) return chatsToRooms(o);
   if (o.entries && typeof o.entries === "object" && !o.app) {
     const name = str(o.name) || "가져온 로어북";
     const now = Date.now();
     const world: World = { kind: "world", id: uid("w"), name, description: str(o.description), rules: "", lore: fromExternalLore(o.entries, name), createdAt: now, updatedAt: now };
     if (!world.lore.length) return null;
-    return { source: "로어북(World Info)", library: [world], rooms: [], skipped: [] };
+    return { source: "로어북(World Info)", library: [world], rooms: [], images: [], skipped: [] };
   }
   // Character Card V1 · 옛 형식
   if ((o.name || o.char_name) && (o.description || o.char_persona) && (o.first_mes || o.char_greeting) && !o.app) return cardToCharacter(o, "캐릭터 카드(V1)");
   return null;
 }
 
-/** PNG 카드의 tEXt 청크(ccv3 우선, 없으면 chara) */
-export function readPngCard(b: Uint8Array): Any | null {
-  if (b[0] !== 0x89 || b[1] !== 0x50 || b[2] !== 0x4e || b[3] !== 0x47) return null;
+/** PNG의 tEXt 청크 전부 (chara · ccv3 · chara-ext-asset_:N) */
+export function readPngText(b: Uint8Array): Record<string, string> {
   const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
   const found: Record<string, string> = {};
   const latin = new TextDecoder("latin1");
@@ -214,15 +298,20 @@ export function readPngCard(b: Uint8Array): Any | null {
       const data = b.subarray(p + 8, p + 8 + len);
       const z = data.indexOf(0);
       const key = latin.decode(data.subarray(0, z));
-      if (key === "ccv3" || key === "chara") found[key] = latin.decode(data.subarray(z + 1));
+      found[key] = latin.decode(data.subarray(z + 1));
     }
     if (type === "IEND") break;
     p += 12 + len;
   }
-  const b64 = found.ccv3 || found.chara;
-  if (!b64) return null;
-  const bin = Uint8Array.from(atob(b64.trim()), (c) => c.charCodeAt(0));
-  return JSON.parse(new TextDecoder().decode(bin));
+  return found;
+}
+/** PNG 카드의 카드 JSON (ccv3 우선, 없으면 chara) */
+export function readPngCard(b: Uint8Array): Any | null {
+  if (b[0] !== 0x89 || b[1] !== 0x50 || b[2] !== 0x4e || b[3] !== 0x47) return null;
+  const found = readPngText(b);
+  const text = found.ccv3 || found.chara;
+  if (!text) return null;
+  return JSON.parse(new TextDecoder().decode(b64(text) ?? new Uint8Array()));
 }
 
 const extOf = (name: string) => name.toLowerCase().split(".").pop() || "";
@@ -231,15 +320,20 @@ const extOf = (name: string) => name.toLowerCase().split(".").pop() || "";
 export async function parseRisuFile(name: string, b: Uint8Array): Promise<RisuImport> {
   const ext = extOf(name);
   if (ext === "risum" || (b[0] === 111 && b[1] === 0 && ext !== "json")) {
-    const { module, assets } = readRisum(b);
-    return moduleToWorld(module, assets, "RisuAI 모듈(risum)");
+    const { module, assetData } = readRisum(b);
+    return moduleToWorld(module, "RisuAI 모듈(risum)", assetData);
   }
   if (b[0] === 0x89 && b[1] === 0x50) {
     const card = readPngCard(b);
     if (!card) throw new Error("이 PNG에는 캐릭터 카드 정보가 없습니다.");
-    const r = parseRisuJson(card);
-    if (!r?.library.length) throw new Error("PNG의 캐릭터 카드 형식을 알 수 없습니다.");
-    return { ...r, source: "캐릭터 카드(PNG)" };
+    if (!(card.spec === "chara_card_v2" || card.spec === "chara_card_v3" || card.name || card.char_name)) throw new Error("PNG의 캐릭터 카드 형식을 알 수 없습니다.");
+    const chunks = readPngText(b);
+    // __asset:N → chara-ext-asset_:N 청크, ccdefault: → 이 PNG 자체(대표 이미지)
+    const load: AssetLoader = (uri) => (uri === "ccdefault:" ? b : uri.startsWith("__asset:") ? b64(chunks[`chara-ext-asset_:${uri.slice(8)}`] ?? chunks[`chara-ext-asset_${uri.slice(8)}`] ?? "") : dataUri(uri));
+    const r = cardToCharacter(card, "캐릭터 카드(PNG)", undefined, load);
+    // 카드에 대표 이미지가 따로 없으면 PNG 그림 자체를 대표 이미지로
+    if (!r.images.some((x) => x.kind === "icon")) r.images.unshift({ ownerId: r.library[0].id, name: "main", kind: "icon", load: () => b });
+    return r;
   }
   if (ext === "charx" || (b[0] === 0x50 && b[1] === 0x4b) || ((ext === "jpg" || ext === "jpeg") && findZip(b))) {
     const files = listZip(b);
@@ -249,8 +343,9 @@ export async function parseRisuFile(name: string, b: Uint8Array): Promise<RisuIm
     if (card?.spec !== "chara_card_v3") throw new Error("charx의 카드 형식(V3)이 아닙니다.");
     const modFile = files.find((f) => f.name === "module.risum");
     const mod = modFile ? readRisum(await modFile.read()) : undefined;
-    const assets = files.filter((f) => f.name.startsWith("assets/")).length;
-    return cardToCharacter(card, "캐릭터 카드(charx)", mod, Math.max(0, assets - 1));
+    const byName = new Map(files.map((f) => [f.name, f]));
+    const load: AssetLoader = (uri) => (uri.startsWith("embeded://") ? byName.get(uri.slice(10))?.read() ?? null : dataUri(uri));
+    return cardToCharacter(card, "캐릭터 카드(charx)", mod, load);
   }
   let j: unknown;
   try {

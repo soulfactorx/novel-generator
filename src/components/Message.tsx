@@ -1,16 +1,11 @@
 import { useState } from "react";
 import { formatTokens, formatUsd } from "../lib/pricing";
+import type { ImagePool } from "../lib/images";
 import type { Message } from "../lib/types";
+import RisuText from "./RisuText";
+import StoryText from "./StoryText";
 
-export function StoryText({ text }: { text: string }) {
-  return (
-    <div className="story space-y-3 whitespace-pre-wrap">
-      {text.split(/\n{2,}/).map((p, i) => (
-        <p key={i}>{p}</p>
-      ))}
-    </div>
-  );
-}
+export { StoryText };
 
 export interface MessageActions {
   onDelete: () => void;
@@ -21,7 +16,7 @@ export interface MessageActions {
   onRewind?: () => void;
 }
 
-export default function MessageView({ m, onDelete, onEdit, onRetry, onBookmark, onBranch, onRewind }: { m: Message } & MessageActions) {
+export default function MessageView({ m, pool, onDelete, onEdit, onRetry, onBookmark, onBranch, onRewind }: { m: Message; pool?: ImagePool } & MessageActions) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(m.text);
   const [showThink, setShowThink] = useState(false);
@@ -64,7 +59,7 @@ export default function MessageView({ m, onDelete, onEdit, onRetry, onBookmark, 
           ) : user ? (
             <div className="whitespace-pre-wrap break-words text-sm">{m.text}</div>
           ) : (
-            <StoryText text={m.text} />
+            <RisuText text={m.text} pool={pool} />
           )}
         </div>
         {!editing && (

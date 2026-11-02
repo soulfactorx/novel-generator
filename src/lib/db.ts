@@ -1,10 +1,11 @@
-import type { Entity, Novel, Room } from "./types";
+import type { Entity, ImageMeta, Novel, Room } from "./types";
 
 /**
  * IndexedDB 저장소 — 레코드 단위로 바뀐 것만 저장
  *  v1: kv(설정 등) + rooms(이야기방)
  *  v2: + library(세계관·등장인물·주인공, kind 필드로 구분)
  *  v3: + novels(소설: 개요 + 회차)
+ *  v4: + images(이미지 정보) · imageData(이미지 바이트, 필요할 때만 읽음). 이미지는 동기화하지 않음
  */
 const DB_NAME = "novel-generator";
 let dbp: Promise<IDBDatabase> | null = null;
@@ -24,13 +25,15 @@ const done = (t: IDBTransaction) =>
 export function openDB(): Promise<IDBDatabase> {
   if (!dbp)
     dbp = new Promise((res, rej) => {
-      const r = indexedDB.open(DB_NAME, 3);
+      const r = indexedDB.open(DB_NAME, 4);
       r.onupgradeneeded = () => {
         const d = r.result;
         if (!d.objectStoreNames.contains("kv")) d.createObjectStore("kv");
         if (!d.objectStoreNames.contains("rooms")) d.createObjectStore("rooms", { keyPath: "id" });
         if (!d.objectStoreNames.contains("library")) d.createObjectStore("library", { keyPath: "id" });
         if (!d.objectStoreNames.contains("novels")) d.createObjectStore("novels", { keyPath: "id" });
+        if (!d.objectStoreNames.contains("images")) d.createObjectStore("images", { keyPath: "id" });
+        if (!d.objectStoreNames.contains("imageData")) d.createObjectStore("imageData");
       };
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
@@ -38,13 +41,13 @@ export function openDB(): Promise<IDBDatabase> {
   return dbp;
 }
 
-export async function loadAll(): Promise<{ kv: Record<string, unknown>; rooms: Room[]; library: Entity[]; novels: Novel[] }> {
+export async function loadAll(): Promise<{ kv: Record<string, unknown>; rooms: Room[]; library: Entity[]; novels: Novel[]; images: ImageMeta[] }> {
   const d = await openDB();
-  const t = d.transaction(["kv", "rooms", "library", "novels"], "readonly");
-  const [keys, vals, rooms, library, novels] = await Promise.all([req(t.objectStore("kv").getAllKeys()), req(t.objectStore("kv").getAll()), req(t.objectStore("rooms").getAll()), req(t.objectStore("library").getAll()), req(t.objectStore("novels").getAll())]);
+  const t = d.transaction(["kv", "rooms", "library", "novels", "images"], "readonly");
+  const [keys, vals, rooms, library, novels, images] = await Promise.all([req(t.objectStore("kv").getAllKeys()), req(t.objectStore("kv").getAll()), req(t.objectStore("rooms").getAll()), req(t.objectStore("library").getAll()), req(t.objectStore("novels").getAll()), req(t.objectStore("images").getAll())]);
   const kv: Record<string, unknown> = {};
   keys.forEach((k, i) => (kv[String(k)] = vals[i]));
-  return { kv, rooms: rooms as Room[], library: library as Entity[], novels: novels as Novel[] };
+  return { kv, rooms: rooms as Room[], library: library as Entity[], novels: novels as Novel[], images: images as ImageMeta[] };
 }
 
 export async function deleteKV(key: string): Promise<void> {
@@ -71,6 +74,31 @@ export async function putRecords(store: "rooms" | "library" | "novels", records:
   await done(t);
 }
 export const putRooms = (rooms: Room[], deleted: string[] = []) => putRecords("rooms", rooms, deleted);
+
+/* ---------------- 이미지 ---------------- */
+/** 이미지 정보와 바이트를 함께 저장 (data가 없으면 정보만 갱신) */
+export async function putImages(items: { meta: ImageMeta; data?: Uint8Array }[], deleted: string[] = []): Promise<void> {
+  if (!items.length && !deleted.length) return;
+  const d = await openDB();
+  const t = d.transaction(["images", "imageData"], "readwrite");
+  for (const { meta, data } of items) {
+    t.objectStore("images").put(meta);
+    // 바이트는 ArrayBuffer로 저장 (Safari 등에서 Blob 저장이 불안정한 경우가 있어서)
+    if (data) t.objectStore("imageData").put(data.slice().buffer, meta.id);
+  }
+  for (const id of deleted) {
+    t.objectStore("images").delete(id);
+    t.objectStore("imageData").delete(id);
+  }
+  await done(t);
+}
+export async function getImageData(id: string): Promise<Uint8Array | null> {
+  const d = await openDB();
+  const v = await req(d.transaction("imageData", "readonly").objectStore("imageData").get(id));
+  // instanceof 는 다른 실행 환경(realm)에서 만든 ArrayBuffer를 못 알아보므로 태그로 판별
+  if (Object.prototype.toString.call(v) === "[object ArrayBuffer]") return new Uint8Array(v as ArrayBuffer);
+  return ArrayBuffer.isView(v) ? new Uint8Array(v.buffer, v.byteOffset, v.byteLength) : null;
+}
 
 /** 브라우저에 영구 저장 요청 (저장 공간 부족 시에도 데이터를 지우지 않도록) */
 export async function requestPersist(): Promise<boolean> {

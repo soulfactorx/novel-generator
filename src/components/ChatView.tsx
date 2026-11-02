@@ -4,7 +4,9 @@ import { branchRoom, contextFor, deleteMessage, diagnoseRoom, dismissMemoryError
 import DiagnosisDialog from "./DiagnosisDialog";
 import Dialog from "./Dialog";
 import { PROVIDER_LABEL } from "../lib/providers/catalog";
-import MessageView, { StoryText } from "./Message";
+import MessageView from "./Message";
+import RisuText from "./RisuText";
+import { imagePool } from "../lib/images";
 import RoomDialog from "./RoomDialog";
 
 export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewStory }: { onMenu: () => void; onOpenSettings: (tab?: string) => void; onOpenLibrary: () => void; onNewStory: () => void }) {
@@ -18,6 +20,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
   const [note, setNote] = useState<string | null>(null);
   const rooms = useApp((s) => s.rooms);
   const lib = useApp((s) => s.library);
+  const images = useApp((s) => s.images);
   const memoryJob = useApp((s) => s.memoryJob);
   const endRef = useRef<HTMLDivElement>(null);
   const busy = live !== null;
@@ -43,6 +46,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
 
   const last = room.messages[room.messages.length - 1];
   const ctx = contextFor(room, lib);
+  const pool = imagePool(ctx, images);
   const myMemory = memoryJob?.roomId === room.id ? memoryJob : null;
   const submit = (text: string) => {
     if (busy || (!text.trim() && room.messages.length > 0)) return;
@@ -83,6 +87,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
             <MessageView
               key={m.id}
               m={m}
+              pool={pool}
               onDelete={() => deleteMessage(room.id, m.id)}
               onEdit={(t) => editMessage(room.id, m.id, t)}
               onRetry={m === last ? () => void regenerate(room.id) : undefined}
@@ -103,7 +108,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
               </div>
               {myLive.lore.length > 0 && <div className="text-xs text-stone-500" title={myLive.lore.map((h) => h.entry.title).join(", ")}>📖 참고한 로어: {myLive.lore.map((h) => h.entry.title || h.matched).join(", ")}</div>}
               {!myLive.text && myLive.thinking && <div className="line-clamp-3 text-xs italic text-stone-500">{myLive.thinking.slice(-300)}</div>}
-              {myLive.text && <StoryText text={myLive.text} />}
+              {myLive.text && <RisuText text={myLive.text} pool={pool} />}
             </div>
           )}
           {!busy && last?.role === "assistant" && !last.error && (

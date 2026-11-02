@@ -1,9 +1,10 @@
 import { useSyncExternalStore } from "react";
 import { previewText, splitChoices } from "./choices";
-import { deleteKV, loadAll, putKV, putRecords, requestPersist } from "./db";
+import { deleteKV, getImageData, loadAll, putImages, putKV, putRecords, requestPersist } from "./db";
+import { imagePool, imagePromptSection, runScripts, shrinkImage, sniffImage, uniqueName, type ImagePool } from "./images";
 import { uid } from "./id";
 import { libraryFromExtra, type LegacyImport } from "./importLegacy";
-import { greetingRoom, type RisuImport } from "./risu";
+import { greetingRoom, type RisuImage, type RisuImport } from "./risu";
 import { formatLore, matchLore, type LoreHit } from "./lore";
 import { buildMemoryRequest, cleanMemory, pendingForMemory } from "./memory";
 import { buildHistory, buildSystemPrompt, outputTokensFor, type StoryContext } from "./prompt";
@@ -15,7 +16,7 @@ import { GistClient, GistError } from "./sync/gist";
 import { mergeSnapshots, type Snapshot } from "./sync/merge";
 import { PROVIDER_LABEL } from "./providers/catalog";
 import { buildEpisodeRequest, buildOutlineRequest, EPISODE_LENGTH, parseOutline, previewEpisode, splitEpisode } from "./novel";
-import { DEFAULT_SETTINGS, type MessageUsage, normalizeNovel, normalizeRoom, normalizeSettings, type Character, type Entity, type EntityKind, type Episode, type Message, type Novel, type Persona, type Room, type Settings, type World } from "./types";
+import { DEFAULT_SETTINGS, type MessageUsage, normalizeNovel, normalizeRoom, normalizeSettings, type Character, type Entity, type EntityKind, type Episode, type ImageMeta, type Message, type Novel, type Persona, type Room, type Settings, type World } from "./types";
 
 export interface LiveState {
   roomId: string;
@@ -43,6 +44,7 @@ export interface AppState {
   novelError: { novelId: string; message: string } | null;
   usage: UsageData;
   sync: SyncStatus;
+  images: Record<string, ImageMeta>; // 이미지 정보 (바이트는 필요할 때 IndexedDB에서)
 }
 export interface SyncStatus {
   connected: boolean;
@@ -76,7 +78,7 @@ export interface NovelLive {
   startedAt: number;
 }
 
-let state: AppState = { ready: false, storageError: "", settings: DEFAULT_SETTINGS, rooms: {}, library: {}, activeRoomId: null, live: null, memoryJob: null, lastUsage: null, legacyExtra: null, view: "rooms", novels: {}, activeNovelId: null, novelLive: null, novelError: null, usage: emptyUsage(), sync: { connected: false, auto: false, encrypted: false, running: false } };
+let state: AppState = { ready: false, storageError: "", settings: DEFAULT_SETTINGS, rooms: {}, library: {}, activeRoomId: null, live: null, memoryJob: null, lastUsage: null, legacyExtra: null, view: "rooms", novels: {}, activeNovelId: null, novelLive: null, novelError: null, usage: emptyUsage(), sync: { connected: false, auto: false, encrypted: false, running: false }, images: {} };
 const subs = new Set<() => void>();
 const dirty = { rooms: new Set<string>(), library: new Set<string>(), novels: new Set<string>() };
 const deleted = { rooms: new Set<string>(), library: new Set<string>(), novels: new Set<string>() };
@@ -177,7 +179,9 @@ if (typeof document !== "undefined")
 
 export async function init() {
   try {
-    const { kv, rooms, library, novels } = await loadAll();
+    const { kv, rooms, library, novels, images } = await loadAll();
+    const imap: Record<string, ImageMeta> = {};
+    images.forEach((m) => (imap[m.id] = m));
     const nmap: Record<string, Novel> = {};
     novels.forEach((n) => (nmap[n.id] = normalizeNovel(n)));
     const recentNovel = Object.values(nmap).sort((a, b) => b.updatedAt - a.updatedAt)[0];
@@ -192,7 +196,7 @@ export async function init() {
     // 동기화 이전부터 쓰던 기기: 저장된 설정이 있으면 기본값(0)보다 우선하도록 1
     settingsUpdatedAt = sm?.settingsUpdatedAt ?? (kv.settings ? 1 : 0);
     syncConfig = (kv.sync as SyncConfig) || null;
-    setState({ ready: true, settings: normalizeSettings(kv.settings), rooms: map, library: lib, activeRoomId: recent?.id ?? null, novels: nmap, activeNovelId: recentNovel?.id ?? null, view: kv.view === "novels" ? "novels" : "rooms", usage: (kv.usage as UsageData)?.days ? (kv.usage as UsageData) : emptyUsage(), legacyExtra: extra && (extra.worlds?.length || extra.characters?.length || extra.personas?.length) ? extra : null });
+    setState({ ready: true, settings: normalizeSettings(kv.settings), rooms: map, library: lib, activeRoomId: recent?.id ?? null, novels: nmap, activeNovelId: recentNovel?.id ?? null, view: kv.view === "novels" ? "novels" : "rooms", usage: (kv.usage as UsageData)?.days ? (kv.usage as UsageData) : emptyUsage(), legacyExtra: extra && (extra.worlds?.length || extra.characters?.length || extra.personas?.length) ? extra : null, images: imap });
     setSyncStatus();
     void requestPersist();
     if (syncConfig?.auto) syncTimer = setTimeout(() => void syncNow(), 1500);
@@ -306,6 +310,8 @@ export function deleteEntity(id: string) {
       putRoom({ ...r, worldId: r.worldId === id ? undefined : r.worldId, personaId: r.personaId === id ? undefined : r.personaId, characterIds: r.characterIds.filter((c) => c !== id) });
   }
   for (const e of Object.values(state.library)) if (e.kind === "character" && e.worldId === id) putEntity({ ...e, worldId: undefined });
+  const imgs = Object.values(state.images).filter((m) => m.ownerId === id).map((m) => m.id);
+  if (imgs.length) void deleteImages(imgs);
   for (const n of Object.values(state.novels))
     if (n.worldId === id || n.personaId === id || n.characterIds.includes(id))
       putNovel({ ...n, worldId: n.worldId === id ? undefined : n.worldId, personaId: n.personaId === id ? undefined : n.personaId, characterIds: n.characterIds.filter((c) => c !== id) });
@@ -335,8 +341,9 @@ export function importLegacy(data: LegacyImport, withKeys: boolean) {
   if (data.rooms[0]) setState({ activeRoomId: data.rooms[0].id });
 }
 /** RisuAI 파일(charx · risum · json · png) 가져오기. greeting: 첫 메시지(인사말) 번호로 새 이야기 시작 */
-export function importRisu(data: RisuImport, opts: { greeting?: number } = {}): string | null {
+export async function importRisu(data: RisuImport, opts: { greeting?: number } = {}): Promise<{ room: string | null; images: number }> {
   upsertLibrary(data.library);
+  const images = await addImages(data.images);
   data.rooms.forEach((r) => putRoom(r));
   let open: string | null = data.rooms[0]?.id ?? null;
   if (data.greeting && opts.greeting !== undefined) {
@@ -345,8 +352,61 @@ export function importRisu(data: RisuImport, opts: { greeting?: number } = {}): 
     open = r.id;
   }
   if (open) setState({ activeRoomId: open, view: "rooms" });
-  return open;
+  return { room: open, images };
 }
+
+/* ---------------- 이미지 (RisuAI 에셋 · 감정 이미지) ---------------- */
+/** 이미지 저장. 그림이 아닌 파일은 건너뛰고, 같은 주인 안에서 이름이 겹치면 _2 … 를 붙인다. 저장한 개수를 돌려준다 */
+export async function addImages(list: Pick<RisuImage, "ownerId" | "name" | "kind" | "load">[]): Promise<number> {
+  const items: { meta: ImageMeta; data: Uint8Array }[] = [];
+  const taken = new Map<string, string[]>();
+  const namesOf = (owner: string) => taken.get(owner) ?? (taken.set(owner, Object.values(state.images).filter((m) => m.ownerId === owner).map((m) => m.name)), taken.get(owner)!);
+  for (const it of list) {
+    let raw: Uint8Array | null = null;
+    try {
+      raw = await it.load();
+    } catch {
+      raw = null;
+    }
+    const mime = raw && sniffImage(raw);
+    if (!raw || !mime) continue;
+    const { bytes, mime: m2 } = await shrinkImage(raw, mime);
+    const names = namesOf(it.ownerId);
+    const name = uniqueName(it.name, names);
+    names.push(name);
+    const now = Date.now();
+    items.push({ meta: { id: uid("i"), ownerId: it.ownerId, name, kind: it.kind, mime: m2, size: bytes.length, createdAt: now + items.length, updatedAt: now }, data: bytes });
+  }
+  if (!items.length) return 0;
+  try {
+    // 한 번에 너무 크게 쓰지 않도록 나눠서 저장
+    for (let i = 0; i < items.length; i += 40) await putImages(items.slice(i, i + 40));
+  } catch (e) {
+    setState({ storageError: `이미지 저장 실패: ${(e as Error)?.message || e}` });
+    return 0;
+  }
+  setState((st) => ({ images: { ...st.images, ...Object.fromEntries(items.map((x) => [x.meta.id, x.meta])) } }));
+  return items.length;
+}
+export async function renameImage(id: string, name: string, kind?: ImageMeta["kind"]) {
+  const m = state.images[id];
+  if (!m) return;
+  const others = Object.values(state.images).filter((x) => x.ownerId === m.ownerId && x.id !== id).map((x) => x.name);
+  const next: ImageMeta = { ...m, name: uniqueName(name, others), ...(kind ? { kind } : {}), updatedAt: Date.now() };
+  setState((st) => ({ images: { ...st.images, [id]: next } }));
+  await putImages([{ meta: next }]).catch((e) => setState({ storageError: `이미지 저장 실패: ${(e as Error)?.message || e}` }));
+}
+export async function deleteImages(ids: string[]) {
+  setState((st) => {
+    const images = { ...st.images };
+    ids.forEach((id) => delete images[id]);
+    return { images };
+  });
+  await putImages([], ids).catch(() => {});
+}
+export const loadImageData = (id: string) => getImageData(id);
+/** 이야기·소설에서 쓸 수 있는 이미지와 봇의 정규식 스크립트 */
+export const poolFor = (target: Pick<Room, "worldId" | "personaId" | "characterIds">): ImagePool => imagePool(contextFor(target), state.images);
 /** v0.1 에서 보관만 해 둔 세계관·캐릭터를 라이브러리로 */
 export function importLegacyExtra(): number {
   const items = state.legacyExtra ? libraryFromExtra(state.legacyExtra) : [];
@@ -405,7 +465,8 @@ export function stopGeneration() {
 export async function send(roomId: string, text: string) {
   const r = state.rooms[roomId];
   if (!r || isGenerating()) return;
-  const t = text.trim();
+  // 봇의 입력 스크립트(editinput)
+  const t = runScripts(text.trim(), poolFor(r).scripts, "editinput").text.trim();
   const msg: Message = { id: uid("m"), role: "user", text: t, createdAt: Date.now() };
   const title = r.messages.length === 0 && r.title === "새 이야기" && t ? t.slice(0, 24) + (t.length > 24 ? "…" : "") : r.title;
   updateRoom(roomId, { messages: t ? [...r.messages, msg] : r.messages, title });
@@ -435,7 +496,9 @@ async function runGeneration(roomId: string, note = "") {
   const s = state.settings;
   if (!room) return;
   const ctx = contextFor(room);
-  const history = buildHistory(room, s.contextMessages);
+  const pool = imagePool(ctx, state.images);
+  // 봇의 프롬프트 스크립트(editprocess): AI에게 보내는 대화만 바꾸고 저장된 대화는 그대로
+  const history = buildHistory(room, s.contextMessages).map((h) => ({ ...h, content: runScripts(h.content, pool.scripts, "editprocess").text }));
   if (!history.length) history.push({ role: "user", content: "이야기를 시작해 주세요." });
   // 로어북은 시스템 프롬프트가 아니라 마지막 입력에 붙인다 → 앞부분이 고정돼 프롬프트 캐시가 유지됨
   const lore = loreFor(room, ctx);
@@ -456,7 +519,7 @@ async function runGeneration(roomId: string, note = "") {
     const res = await callAI(
       "chat",
       {
-        system: buildSystemPrompt(s, room, ctx),
+        system: buildSystemPrompt(s, room, ctx, imagePromptSection(ctx, pool, "chat")),
         messages: history,
         maxTokens: outputTokensFor(s),
         signal: controller.signal,
@@ -469,7 +532,8 @@ async function runGeneration(roomId: string, note = "") {
       },
       { onRestart: () => ((streamed = ""), live({ text: "", thinking: "" })) },
     );
-    const { text, choices } = s.choices ? splitChoices(res.text) : { text: res.text.trim(), choices: [] };
+    const out = runScripts(res.text, pool.scripts, "editoutput").text; // 봇의 출력 스크립트
+    const { text, choices } = s.choices ? splitChoices(out) : { text: out.trim(), choices: [] };
     if (!text) throw new ProviderError("AI가 빈 응답을 보냈습니다. 다시 시도해 주세요.", 0, "server");
     const cur = state.rooms[roomId];
     const reply: Message = { id: uid("m"), role: "assistant", text, ...(choices.length ? { choices } : {}), ...(res.thinking ? { thinking: res.thinking } : {}), model: res.model, ...(res.cost ? { usage: res.cost } : {}), ...(res.usedFallback ? { fallback: true } : {}), createdAt: Date.now() };
@@ -644,8 +708,10 @@ export async function writeEpisode(novelId: string, index: number, note = "", un
   setState({ novelLive: { novelId, task: "episode", index, until, text: "", thinking: "", status: "", startedAt: Date.now() }, novelError: null });
   void holdWake();
   let streamed = "";
+  const pool = poolFor(n);
   const save = (raw: string, model: string, incomplete: boolean, usage?: MessageUsage) => {
-    const { text, summary } = splitEpisode(raw);
+    const { text: body, summary } = splitEpisode(raw);
+    const text = runScripts(body, pool.scripts, "editoutput").text.trim(); // 봇의 출력 스크립트
     const cur = state.novels[novelId];
     if (!cur || !text) return;
     const now = Date.now();
@@ -662,7 +728,7 @@ export async function writeEpisode(novelId: string, index: number, note = "", un
     const scan = [n.outline[index].title, n.outline[index].summary, n.episodes[index - 1]?.text.slice(-1500) ?? ""].join("\n");
     const lore = groups.length ? formatLore(matchLore(groups, scan)) : "";
     const res = await callAI("episode", {
-      ...buildEpisodeRequest(s, n, ctx, index, { lore, note }),
+      ...buildEpisodeRequest(s, n, ctx, index, { lore, note, imageRules: imagePromptSection(ctx, pool, "novel") }),
       maxTokens: EPISODE_LENGTH[n.episodeLength].tokens,
       signal: novelController.signal,
       onText: (d) => novelLiveSet({ text: previewEpisode((streamed += d)) }),

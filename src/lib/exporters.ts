@@ -1,4 +1,5 @@
 import { dataUrlToBytes } from "./cover";
+import { extOfMime, type Block } from "./images";
 import type { Novel, Room } from "./types";
 
 /* ---------------- ZIP (무압축 STORE, UTF-8 파일명) ---------------- */
@@ -77,9 +78,16 @@ function concat(parts: Uint8Array[]): Uint8Array {
 /* ---------------- TXT ---------------- */
 const episodeHeading = (i: number, title: string) => `제${i + 1}화${title.trim() && title.trim() !== `${i + 1}화` ? ` ${title.trim()}` : ""}`;
 
-export function novelToTxt(n: Novel): string {
+/** 내보내기 옵션: 원고를 문단·그림으로 나누는 함수(봇의 표시 스크립트·그림 표시 반영)와 그림 바이트 */
+export interface ExportImages {
+  blocks: (text: string) => Block[];
+  images: Record<string, { bytes: Uint8Array; mime: string }>;
+}
+const plainOf = (text: string, ex?: ExportImages) => (ex ? ex.blocks(text).flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n\n") : text.trim());
+
+export function novelToTxt(n: Novel, ex?: ExportImages): string {
   const head = [n.title || "제목 없음", n.author.trim() && `지은이: ${n.author.trim()}`, n.genre.trim() && `장르: ${n.genre.trim()}`].filter(Boolean).join("\n");
-  const body = n.episodes.filter((e) => e.text.trim()).map((e, i) => `${episodeHeading(i, e.title)}\n\n${e.text.trim()}`);
+  const body = n.episodes.filter((e) => e.text.trim()).map((e, i) => `${episodeHeading(i, e.title)}\n\n${plainOf(e.text, ex)}`);
   return [head, ...body].join("\n\n\n") + "\n";
 }
 
@@ -113,7 +121,7 @@ function uuidFrom(seed: string): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
-export function novelToEpub(n: Novel, now = new Date()): Uint8Array {
+export function novelToEpub(n: Novel, now = new Date(), ex?: ExportImages): Uint8Array {
   const title = clean(n.title.trim() || "제목 없음");
   const author = clean(n.author.trim() || "작자 미상");
   const eps = n.episodes.map((e, i) => ({ ...e, i })).filter((e) => e.text.trim());
@@ -129,7 +137,23 @@ export function novelToEpub(n: Novel, now = new Date()): Uint8Array {
       /* 표지가 깨졌으면 표지 없이 */
     }
   }
-  const css = `body{font-family:serif;line-height:1.8;margin:0 1em;word-break:keep-all}h1{font-size:1.4em;margin:2em 0 1.5em;text-align:center}p{margin:0;text-indent:1em}p+p{margin-top:.6em}.title{text-align:center;margin-top:30%}.title h1{font-size:2em}.title p{text-indent:0;text-align:center}.cover{margin:0;padding:0;text-align:center}.cover img{max-width:100%;max-height:100vh}\n`;
+  // 원고 속 그림 (봇 에셋)
+  const used = new Map<string, { file: string; mime: string; bytes: Uint8Array }>();
+  const bodyOf = (text: string) => {
+    if (!ex) return paras(text);
+    return ex
+      .blocks(text)
+      .map((b) => {
+        if (b.type === "text") return paras(b.text);
+        const img = ex.images[b.id];
+        if (!img || !/^image\/(jpeg|png|webp|gif)$/.test(img.mime)) return ""; // EPUB 리더가 못 여는 형식은 뺀다
+        if (!used.has(b.id)) used.set(b.id, { file: `images/${b.id}.${extOfMime(img.mime)}`, mime: img.mime, bytes: img.bytes });
+        return `<div class="ill"><img src="${used.get(b.id)!.file}" alt=""/></div>`;
+      })
+      .join("\n");
+  };
+  const bodies = chapters.map((c) => bodyOf(c.text));
+  const css = `.ill{margin:1em 0;text-align:center;text-indent:0}.ill img{max-width:100%;max-height:90vh}body{font-family:serif;line-height:1.8;margin:0 1em;word-break:keep-all}h1{font-size:1.4em;margin:2em 0 1.5em;text-align:center}p{margin:0;text-indent:1em}p+p{margin-top:.6em}.title{text-align:center;margin-top:30%}.title h1{font-size:2em}.title p{text-indent:0;text-align:center}.cover{margin:0;padding:0;text-align:center}.cover img{max-width:100%;max-height:100vh}\n`;
   const opf = `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid" xml:lang="ko">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -146,6 +170,7 @@ export function novelToEpub(n: Novel, now = new Date()): Uint8Array {
     <item id="css" href="style.css" media-type="text/css"/>
 ${cover ? `    <item id="cover-image" href="${cover.file}" media-type="${cover.mime}" properties="cover-image"/>\n    <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>\n` : ""}    <item id="title" href="title.xhtml" media-type="application/xhtml+xml"/>
 ${chapters.map((c) => `    <item id="${c.id}" href="${c.file}" media-type="application/xhtml+xml"/>`).join("\n")}
+${[...used.entries()].map(([id, u]) => `    <item id="img-${id}" href="${u.file}" media-type="${u.mime}"/>`).join("\n")}
   </manifest>
   <spine toc="ncx">
 ${cover ? '    <itemref idref="cover" linear="yes"/>\n' : ""}    <itemref idref="title"/>
@@ -174,7 +199,8 @@ ${chapters.map((c, k) => `    <navPoint id="np${k + 1}" playOrder="${k + 1}"><na
       { name: "OEBPS/style.css", data: css },
       ...(cover ? [{ name: `OEBPS/${cover.file}`, data: cover.bytes }, { name: "OEBPS/cover.xhtml", data: xhtml(title, `<div class="cover"><img src="${cover.file}" alt="${esc(title)} 표지"/></div>`) }] : []),
       { name: "OEBPS/title.xhtml", data: xhtml(title, `<div class="title"><h1>${esc(title)}</h1><p>${esc(author)}</p></div>`) },
-      ...chapters.map((c) => ({ name: `OEBPS/${c.file}`, data: xhtml(c.heading, `<h1>${esc(c.heading)}</h1>\n${paras(c.text)}`) })),
+      ...chapters.map((c, k) => ({ name: `OEBPS/${c.file}`, data: xhtml(c.heading, `<h1>${esc(c.heading)}</h1>\n${bodies[k]}`) })),
+      ...[...used.values()].map((u) => ({ name: `OEBPS/${u.file}`, data: u.bytes })),
     ],
     now,
   );

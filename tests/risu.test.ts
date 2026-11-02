@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { crc32 } from "../src/lib/exporters";
-import { characterToCard, characterToCharx, fillMacros, greetingRoom, parseRisuFile, parseRisuJson, readRisum, worldToModule, writeRisum } from "../src/lib/risu";
+import { characterToCard, characterToCharx, fillMacros, greetingRoom, parseRisuFile, parseRisuJson, readRisum, rpackEncode, worldToModule, writeRisum } from "../src/lib/risu";
 import type { Character, World } from "../src/lib/types";
 import { listZip } from "../src/lib/unzip";
 
@@ -49,6 +49,10 @@ function pngWith(...texts: [string, object][]) {
   return concat(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", new Uint8Array(13)), ...texts.map(([k, j]) => chunk("tEXt", text(k, j))), chunk("IEND", new Uint8Array(0)));
 }
 
+// 가장 작은 PNG·WebP 머리 (형식 판별용)
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+const WEBP = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]);
+
 const cardV3 = {
   spec: "chara_card_v3",
   spec_version: "3.0",
@@ -94,7 +98,8 @@ describe("RisuAI 가져오기", () => {
     expect(w.kind).toBe("world");
     expect(w.description).toBe("주인공가 사는 도시");
     expect(w.lore.map((e) => [e.title, e.keys, !!e.always])).toEqual([["등불", ["등불", "마력등"], false], ["비", ["비"], true]]);
-    expect(r.skipped).toEqual(["정규식 스크립트 1개", "트리거 2개"]);
+    expect(r.skipped).toEqual(["트리거 스크립트 2개"]); // 내용 없는 정규식 스크립트는 버림
+    expect(w.scripts).toBeUndefined();
   });
 
   test("V3 JSON 카드 → 등장인물 (로어·인사말·건너뛴 것)", () => {
@@ -105,7 +110,8 @@ describe("RisuAI 가져오기", () => {
     expect(c.speech).toBe('서율: "규정은 규정입니다."');
     expect(c.lore.map((e) => [e.title, e.content, e.enabled, !!e.always])).toEqual([["조합", "항구의 마법 조합", true, false], ["re", "정규식 로어", false, false], ["날씨", "항상 비가 온다", true, true]]);
     expect(r.greeting?.greetings).toEqual(["*서율가 서류를 내려놓는다.* 늦었군요, 주인공.", "서율: 또 만났네요."]);
-    expect(r.skipped).toEqual(["시스템 프롬프트", "정규식 스크립트 2개", "트리거 1개"]);
+    expect(r.skipped).toEqual(["시스템 프롬프트", "트리거 스크립트 1개"]);
+    expect(r.images).toEqual([]);
     const room = greetingRoom(r.greeting!, 1);
     expect(room.characterIds).toEqual([c.id]);
     expect(room.messages[0]).toMatchObject({ role: "assistant", text: "서율: 또 만났네요." });
@@ -121,25 +127,50 @@ describe("RisuAI 가져오기", () => {
     await expect(parseRisuFile("x.png", pngWith(["other", {}]))).rejects.toThrow("캐릭터 카드 정보가 없습니다");
   });
 
-  test("charx(DEFLATE) — module.risum 로어북 우선, JPEG 앞에 붙은 charx", async () => {
-    const mod = writeRisum({ name: "서율 Module", lorebook: [{ key: "등불", content: "모듈 로어", comment: "등불", mode: "normal" }], regex: [{}] });
+  test("charx(DEFLATE) — 에셋·감정 이미지, 정규식 스크립트, module.risum 로어북 우선, JPEG 앞에 붙은 charx", async () => {
+    const mod = writeRisum({ name: "서율 Module", lorebook: [{ key: "등불", content: "그림 목록: {{assetlist}}", comment: "등불", mode: "normal" }], regex: [{ comment: "그림", in: "<img=\"(.+?)\">", out: "{{img::$1}}", type: "editdisplay" }] });
+    const card = { ...cardV3, data: { ...cardV3.data, extensions: { risuai: { viewScreen: "emotion", customScripts: [{ comment: "c", in: "a", out: "b", type: "editoutput" }] } }, assets: [
+      { type: "icon", uri: "embeded://assets/icon/image/main.png", name: "main", ext: "png" },
+      { type: "x-risu-asset", uri: "embeded://assets/other/image/항구.png", name: "항구", ext: "png" },
+      { type: "emotion", uri: "embeded://assets/emotion/image/기쁨.webp", name: "기쁨", ext: "webp" },
+      { type: "x-risu-asset", uri: "embeded://assets/other/audio/bgm.mp3", name: "bgm", ext: "mp3" },
+      { type: "x-risu-asset", uri: "embeded://assets/other/image/없음.png", name: "없음", ext: "png" },
+    ] } };
     const z = await deflateZip([
-      { name: "card.json", data: enc(JSON.stringify(cardV3)) },
+      { name: "card.json", data: enc(JSON.stringify(card)) },
       { name: "module.risum", data: mod },
-      { name: "assets/icon/image/main.png", data: new Uint8Array([1, 2, 3]) },
-      { name: "assets/other/image/a.png", data: new Uint8Array([4]) },
+      { name: "assets/icon/image/main.png", data: PNG },
+      { name: "assets/other/image/항구.png", data: PNG },
+      { name: "assets/emotion/image/기쁨.webp", data: WEBP },
+      { name: "assets/other/audio/bgm.mp3", data: new Uint8Array([1]) },
     ]);
-    expect(listZip(z).map((f) => f.method)).toEqual([8, 8, 8, 8]);
+    expect(listZip(z).map((f) => f.method)).toEqual([8, 8, 8, 8, 8, 8]);
     const r = await parseRisuFile("서율.charx", z);
     const c = r.library[0] as Character;
     expect(r.source).toBe("캐릭터 카드(charx)");
-    expect(c.lore.map((e) => e.content)).toEqual(["모듈 로어"]);
-    expect(r.skipped).toContain("정규식 스크립트 3개"); // 카드 2개 + 모듈 1개
-    expect(r.skipped).toContain("이미지·에셋 1개");
+    expect(c.lore.map((e) => e.content)).toEqual(['그림 목록: ["항구","없음"]']);
+    expect(c.scripts?.map((x) => x.type)).toEqual(["editoutput", "editdisplay"]);
+    expect(c.emotionMode).toBe(true);
+    expect(r.images.map((x) => [x.name, x.kind, x.ownerId === c.id])).toEqual([["main", "icon", true], ["항구", "asset", true], ["기쁨", "emotion", true], ["없음", "asset", true]]);
+    expect(await r.images[1].load()).toEqual(PNG);
+    expect(await r.images[3].load()).toBeNull(); // charx 안에 없는 파일
+    expect(r.skipped).toContain("그림이 아닌 에셋(음악·영상 등) 1개");
     const jpeg = concat(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 9, 9, 9, 0xff, 0xd9]), z);
     expect((await parseRisuFile("서율.jpeg", jpeg)).library[0].name).toBe("서율");
     const noCard = await deflateZip([{ name: "x.txt", data: enc("x") }]);
     await expect(parseRisuFile("a.charx", noCard)).rejects.toThrow("card.json");
+  });
+
+  test("risum 에셋 → 세계관 이미지, PNG 카드의 그림은 대표 이미지", async () => {
+    const b = writeRisum({ name: "항구 모듈", assets: [["밤바다", "", "png"], ["노래", "", "mp3"]], lorebook: [] });
+    const withAssets = concat(b.subarray(0, b.length - 1), new Uint8Array([1, PNG.length, 0, 0, 0]), rpackEncode(PNG), new Uint8Array([1, 1, 0, 0, 0, 5, 0]));
+    const r = await parseRisuFile("항구.risum", withAssets);
+    expect(r.images.map((x) => [x.name, x.kind])).toEqual([["밤바다", "asset"]]);
+    expect(await r.images[0].load()).toEqual(PNG);
+    const png = pngWith(["ccv3", { spec: "chara_card_v3", data: { name: "P", description: "d" } }]);
+    const p = await parseRisuFile("p.png", png);
+    expect(p.images.map((x) => [x.name, x.kind])).toEqual([["main", "icon"]]);
+    expect(await p.images[0].load()).toEqual(png);
   });
 
   test("모듈 JSON · 로어북 JSON · World Info · 채팅", () => {

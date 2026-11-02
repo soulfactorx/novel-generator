@@ -291,12 +291,14 @@ function DataTab() {
             </div>
           </div>
         )}
-        {risu && <RisuPreview data={risu} greet={greet} setGreet={setGreet} onCancel={() => setRisu(null)} onImport={() => {
-          importRisu(risu, greet >= 0 && risu.greeting ? { greeting: greet } : {});
-          const c = risu.library.filter((e) => e.kind === "character").length, w = risu.library.filter((e) => e.kind === "world").length;
-          const made = risu.rooms.length + (greet >= 0 && risu.greeting ? 1 : 0);
-          setMsg({ ok: true, text: `✅ ${[c && `등장인물 ${c}명`, w && `세계관 ${w}개`, made && `이야기 ${made}개`].filter(Boolean).join(", ")}을(를) 가져왔습니다.` });
+        {risu && <RisuPreview data={risu} greet={greet} setGreet={setGreet} onCancel={() => setRisu(null)} onImport={async () => {
+          const data = risu;
           setRisu(null);
+          setMsg({ ok: true, text: data.images.length ? `⏳ 이미지 ${data.images.length}장을 저장하는 중…` : "⏳ 가져오는 중…" });
+          const res = await importRisu(data, greet >= 0 && data.greeting ? { greeting: greet } : {});
+          const c = data.library.filter((e) => e.kind === "character").length, w = data.library.filter((e) => e.kind === "world").length;
+          const made = data.rooms.length + (greet >= 0 && data.greeting ? 1 : 0);
+          setMsg({ ok: true, text: `✅ ${[c && `등장인물 ${c}명`, w && `세계관 ${w}개`, res.images && `이미지 ${res.images}장`, made && `이야기 ${made}개`].filter(Boolean).join(", ")}을(를) 가져왔습니다.` });
         }} />}
         {legacyExtra && (
           <div className="space-y-2 rounded-lg bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
@@ -312,6 +314,9 @@ function DataTab() {
 
 function RisuPreview({ data, greet, setGreet, onImport, onCancel }: { data: RisuImport; greet: number; setGreet: (n: number) => void; onImport: () => void; onCancel: () => void }) {
   const lore = data.library.reduce((n, e) => n + (e.kind === "persona" ? 0 : e.lore.length), 0);
+  const scripts = data.library.reduce((n, e) => n + (e.kind === "persona" ? 0 : e.scripts?.length ?? 0), 0);
+  const emo = data.images.filter((x) => x.kind === "emotion").length;
+  const emotionMode = data.library.some((e) => e.kind === "character" && e.emotionMode);
   const names = data.library.map((e) => e.name).join(", ");
   const g = data.greeting;
   return (
@@ -324,6 +329,13 @@ function RisuPreview({ data, greet, setGreet, onImport, onCancel }: { data: Risu
         {lore > 0 && <> · 로어북 <b>{lore}</b>개</>}
         {data.rooms.length > 0 && <> · 대화 <b>{data.rooms.length}</b>개 → 이야기 (메시지 {data.rooms.reduce((n, r) => n + r.messages.length, 0)}개)</>}
       </div>
+      {(data.images.length > 0 || scripts > 0) && (
+        <div>
+          🖼 이미지 <b>{data.images.length}</b>장{emo > 0 && <> (감정 이미지 {emo}장{emotionMode && " · 응답마다 감정 이미지 표시"})</>}
+          {scripts > 0 && <> · 정규식 스크립트 <b>{scripts}</b>개</>}
+          <p className="hint">봇에 정해진 규칙대로 이야기·소설에서 그림이 나옵니다. 이미지는 이 기기에만 저장되고 동기화되지 않습니다.</p>
+        </div>
+      )}
       {g && (
         <label className="block">
           <span className="label">첫 메시지로 새 이야기 시작</span>
@@ -334,7 +346,7 @@ function RisuPreview({ data, greet, setGreet, onImport, onCancel }: { data: Risu
         </label>
       )}
       {data.skipped.length > 0 && <p className="hint">이 앱에서 쓰지 않아 가져오지 않는 것: {data.skipped.join(", ")}</p>}
-      <p className="hint">{"{{char}}"}는 캐릭터 이름으로, {"{{user}}"}는 '주인공'으로 바꿉니다. RisuAI 전용 문법({"{{getvar::…}}"} 등)은 그대로 남습니다.</p>
+      <p className="hint">{"{{char}}"}는 캐릭터 이름으로, {"{{user}}"}는 '주인공'으로 바꿉니다. 그 밖의 RisuAI 전용 문법({"{{getvar::…}}"}, 조건문 등)과 트리거·Lua는 지원하지 않습니다.</p>
       <div className="flex gap-2">
         <button className="btn-primary" onClick={onImport}>가져오기</button>
         <button className="btn-ghost" onClick={onCancel}>취소</button>

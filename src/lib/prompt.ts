@@ -42,7 +42,7 @@ export interface StoryContext {
   persona?: Persona;
 }
 
-export function buildSystemPrompt(s: Settings, room: Room, ctx: StoryContext = { characters: [] }): string {
+export function buildSystemPrompt(s: Settings, room: Room, ctx: StoryContext = { characters: [] }, imageRules: string[] = []): string {
   const parts = [
     "너는 사용자와 함께 이야기를 만들어 가는 소설가다. 사용자의 입력은 주인공의 행동·대사이거나 이야기 전개에 대한 요청이다.",
     "",
@@ -64,7 +64,7 @@ export function buildSystemPrompt(s: Settings, room: Room, ctx: StoryContext = {
       `본문을 마친 뒤 빈 줄을 두고 "${CHOICE_MARKER}" 한 줄을 쓴 다음, 주인공이 할 수 있는 서로 다른 다음 행동 4가지를 "1. "부터 번호를 붙여 한 줄씩 짧게 제시한다.`,
     );
   }
-  parts.push(...contextSections(ctx, "chat"));
+  parts.push(...contextSections(ctx, "chat"), ...imageRules);
   if (room.premise.trim()) parts.push("", ctx.world || ctx.characters.length ? "## 이 이야기의 추가 설정" : "## 이야기 설정", room.premise.trim());
   if (room.memory.trim()) parts.push("", "## 지금까지의 줄거리 요약 (참고용, 문장을 그대로 반복하지 말 것)", room.memory.trim());
   return parts.join("\n");

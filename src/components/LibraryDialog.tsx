@@ -5,6 +5,7 @@ import { createEntity, createRoom, deleteEntity, entitiesOf, updateEntity, useAp
 import type { Character, Entity, EntityKind, Persona, World } from "../lib/types";
 import Dialog from "./Dialog";
 import LoreEditor from "./LoreEditor";
+import { ImageGallery, RisuSettings } from "./ImageGallery";
 
 const KINDS: [EntityKind, string, string][] = [
   ["world", "세계관", "🌍"],
@@ -119,6 +120,8 @@ function WorldForm({ w }: { w: World }) {
         <textarea className="input min-h-20" value={w.rules} onChange={(e) => up({ rules: e.target.value })} placeholder="예) 마법에는 반드시 대가가 따른다. / 현대 외래어를 쓰지 않는다." aria-label="세계관 규칙" />
       </F>
       <LoreEditor entries={w.lore} onChange={(lore) => up({ lore })} />
+      <ImageGallery ownerId={w.id} />
+      <RisuSettings e={w} />
     </>
   );
 }
@@ -144,6 +147,8 @@ function CharacterForm({ c, worlds }: { c: Character; worlds: World[] }) {
         <textarea className="input min-h-24" value={c.speech} onChange={(e) => up({ speech: e.target.value })} placeholder={'"규정은 규정입니다. 예외는 없어요."\n"…그래도, 오늘은 못 본 걸로 하죠."'} aria-label="말투 예시" />
       </F>
       <LoreEditor entries={c.lore} onChange={(lore) => up({ lore })} />
+      <ImageGallery ownerId={c.id} />
+      <RisuSettings e={c} />
     </>
   );
 }
