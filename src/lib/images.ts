@@ -53,18 +53,57 @@ export function editDistance(a: string, b: string): number {
 }
 const trimName = (s: string) => s.replace(/\.(webp|png|jpe?g|gif|avif|mp4|webm|mp3|wav|ogg)$/i, "").trim().replace(/[_ \-.]/g, "");
 const MAX_DIFF = 4; // RisuAI 기본값
+const lcp = (a: string, b: string) => {
+  let i = 0;
+  while (i < a.length && a[i] === b[i]) i++;
+  return i;
+};
+/** 가장 비슷한 이름 (글자 차이가 적은 순, 같으면 앞부분이 더 많이 같은 것) */
+function closest<T>(q: string, items: T[], key: (x: T) => string): { item?: T; d: number } {
+  let item: T | undefined;
+  let d = Infinity;
+  let p = -1;
+  for (const x of items) {
+    const k = key(x);
+    const dd = editDistance(q, k);
+    const pp = lcp(q, k);
+    if (dd < d || (dd === d && pp > p)) [item, d, p] = [x, dd, pp];
+  }
+  return { item, d };
+}
+
+/**
+ * 이름으로 그림 찾기: 정확히 → 기호·확장자 무시 → 앞부분이 같은 것(happy → happy smile)
+ * → '인물_구분_복장_표정' 같은 이름은 칸별로(마지막 칸만 비슷하게, 그 복장이 없으면 같은 인물의 다른 복장)
+ * → 비슷한 이름. RisuAI는 글자 4개 차이까지 허용하지만 긴 이름에서 happy → sad 처럼 다른 감정이 골라지므로 더 엄격하게.
+ */
 export function findAsset(name: string, list: ImageMeta[], fuzzy = true): ImageMeta | undefined {
   const n = name.trim().toLowerCase();
   const exact = list.find((m) => m.name.toLowerCase() === n);
   if (exact || !fuzzy) return exact;
-  let best: ImageMeta | undefined;
-  let bestD = Infinity;
   const t = trimName(n);
-  for (const m of list) {
-    const d = editDistance(t, trimName(m.name.toLowerCase()));
-    if (d < bestD) [best, bestD] = [m, d];
+  if (!t) return undefined;
+  const trimmed = list.map((m) => ({ m, t: trimName(m.name.toLowerCase()), seg: m.name.toLowerCase().split("_").map(trimName) }));
+  const same = trimmed.find((x) => x.t === t);
+  if (same) return same.m;
+  const prefix = trimmed.filter((x) => x.t.startsWith(t) && t.length >= 4).sort((a, b) => a.t.length - b.t.length)[0];
+  if (prefix) return prefix.m;
+  const seg = n.replace(/\.(webp|png|jpe?g|gif|avif)$/i, "").split("_").map(trimName);
+  if (seg.length >= 3) {
+    const last = seg[seg.length - 1];
+    const ok = (d: number) => d <= Math.max(1, Math.floor(last.length * 0.45));
+    const pick = (cands: typeof trimmed) => {
+      const pre = cands.find((x) => x.seg[x.seg.length - 1].startsWith(last) && last.length >= 3);
+      if (pre) return pre.m;
+      const c = closest(last, cands, (x) => x.seg[x.seg.length - 1]);
+      return c.item && ok(c.d) ? c.item.m : undefined;
+    };
+    const sameHead = trimmed.filter((x) => x.seg.length === seg.length && x.seg.slice(0, -1).join("_") === seg.slice(0, -1).join("_"));
+    const hit = sameHead.length ? pick(sameHead) : pick(trimmed.filter((x) => x.seg.length === seg.length && x.seg[0] === seg[0]));
+    if (hit) return hit;
   }
-  return bestD <= MAX_DIFF ? best : undefined;
+  const c = closest(t, trimmed, (x) => x.t);
+  return c.item && c.d <= Math.min(MAX_DIFF, Math.floor(t.length * 0.15)) ? c.item.m : undefined;
 }
 
 /* ---------------- 정규식 스크립트 ---------------- */
@@ -150,13 +189,29 @@ export function renderRisu(text: string, pool: ImagePool): { html: string; ids: 
     if (type === "image") return `<div class="risu-inlay"><img src="${src}" alt="${esc(hit.name)}"></div>\n`;
     return ""; // 영상·음악·배경은 쓰지 않음
   });
+  // <img src="에셋이름"> · <img="에셋이름">: 주소가 아니라 이름이면 에셋으로 (봇 스크립트가 없어도 그림이 나오게)
+  const byName = (name: string) => {
+    const hit = findAsset(name, pool.assets) ?? findAsset(name, pool.emotions, false);
+    if (hit) ids.add(hit.id);
+    return hit;
+  };
+  html = html
+    .replace(/<img=["']([^"'<>]+)["']\s*\/?>/gi, (m, name: string) => {
+      const hit = byName(name);
+      return hit ? `<img src="${imgToken(hit.id)}" alt="${esc(hit.name)}" class="risu-img">` : m;
+    })
+    .replace(/(<img\b[^>]*?\bsrc\s*=\s*)(["'])([^"']*)\2/gi, (m, pre: string, q: string, src: string) => {
+      if (!src.trim() || /^(nvimg:|blob:|data:|https?:|\/)/i.test(src.trim())) return m;
+      const hit = byName(src);
+      return hit ? `${pre}${q}${imgToken(hit.id)}${q}` : m;
+    });
   return { html, ids: [...ids], emotion: r.emotion };
 }
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /* ---------------- 안전한 HTML (스크립트·외부 주소 제거) ---------------- */
 const TAGS = new Set("div span p br b i u s strong em small big sub sup mark hr blockquote ul ol li h1 h2 h3 h4 h5 h6 table thead tbody tfoot tr td th caption img details summary font center pre code ruby rt rp q cite abbr del ins figure figcaption".split(" "));
-const DROP = new Set(["script", "style", "iframe", "object", "embed", "link", "meta", "base", "form", "input", "button", "textarea", "select", "svg", "math", "template", "audio", "video", "source", "noscript", "title"]);
+const DROP = new Set(["script", "iframe", "object", "embed", "link", "meta", "base", "form", "input", "button", "textarea", "select", "svg", "math", "template", "audio", "video", "source", "noscript", "title"]);
 const safeUrl = (u: string) => /^(blob:|data:image\/(png|jpe?g|gif|webp|avif);)/i.test(u.trim());
 function safeStyle(css: string): string {
   if (/expression\s*\(|@import|javascript:|behavior\s*:/i.test(css)) return "";
@@ -169,7 +224,70 @@ function safeStyle(css: string): string {
     .join(";");
 }
 /** urls: 그림 id → 실제 주소. 브라우저(DOM)에서만 사용 */
-export function sanitizeHtml(html: string, urls: Record<string, string>): string {
+/**
+ * 봇의 <style>을 이 메시지 안에서만 적용되게: 모든 선택자 앞에 범위(scope)를 붙이고,
+ * 페이지 전체를 건드리는 html/body/:root 규칙, @import·@font-face, 외부 url()은 버린다.
+ */
+export function scopeCss(css: string, scope: string): string {
+  const src = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  let i = 0;
+  /** i부터 chars 중 하나가 처음 나오는 위치 (따옴표 문자열·괄호 안은 건너뜀). 없으면 -1 */
+  const next = (chars: string, from = i): number => {
+    let paren = 0;
+    for (let k = from; k < src.length; k++) {
+      const ch = src[k];
+      if (ch === '"' || ch === "'") {
+        const end = src.indexOf(ch, k + 1);
+        k = end === -1 ? src.length : end;
+      } else if (ch === "(") paren++;
+      else if (ch === ")") paren = Math.max(0, paren - 1);
+      else if (!paren && chars.includes(ch)) return k;
+    }
+    return -1;
+  };
+  const skipBlock = () => {
+    let depth = 1; // '{' 다음부터 짝이 맞는 '}' 까지
+    while (i < src.length && depth) {
+      const k = next("{}");
+      if (k === -1) return void (i = src.length);
+      depth += src[k] === "{" ? 1 : -1;
+      i = k + 1;
+    }
+  };
+  const block = (): string => {
+    let out = "";
+    while (i < src.length) {
+      const k = next("{};");
+      if (k === -1) break;
+      if (src[k] === "}") {
+        i = k + 1;
+        return out; // 이 블록 끝
+      }
+      const head = src.slice(i, k).trim();
+      i = k + 1;
+      if (src[k] === ";") continue; // @import · @charset 등 중괄호 없는 규칙은 버림
+      if (/^@(media|supports|container|layer)\b/i.test(head)) {
+        const inner = block();
+        if (inner.trim()) out += `${head}{${inner}}`;
+      } else if (/^@(-\w+-)?keyframes\b/i.test(head)) {
+        const start = i;
+        skipBlock();
+        out += `${head}{${src.slice(start, i - 1)}}`;
+      } else if (head.startsWith("@")) skipBlock(); // @font-face 등: 버림
+      else {
+        const end = next("}");
+        const body = safeStyle(src.slice(i, end === -1 ? src.length : end));
+        i = end === -1 ? src.length : end + 1;
+        const sels = head.split(",").map((x) => x.trim()).filter((x) => x && !/^(html|body|:root)\b/i.test(x) && !/\*\s*$/.test(x));
+        if (sels.length && body.trim()) out += `${sels.map((x) => `.${scope} ${x}`).join(",")}{${body}}`;
+      }
+    }
+    return out;
+  };
+  return block();
+}
+
+export function sanitizeHtml(html: string, urls: Record<string, string>, scope?: string): string {
   const withUrls = html.replace(IMG_TOKEN, (_, id: string) => urls[id] ?? "");
   const tpl = document.createElement("template");
   tpl.innerHTML = withUrls;
@@ -182,6 +300,13 @@ export function sanitizeHtml(html: string, urls: Record<string, string>): string
       if (child.nodeType !== 1) continue;
       const el = child as Element;
       const tag = el.tagName.toLowerCase();
+      if (tag === "style") {
+        const css = scope ? scopeCss(el.textContent ?? "", scope) : "";
+        if (css) el.textContent = css;
+        else el.remove();
+        for (const a of [...el.attributes]) el.removeAttribute(a.name);
+        continue;
+      }
       if (DROP.has(tag)) {
         el.remove();
         continue;
@@ -205,6 +330,22 @@ export function sanitizeHtml(html: string, urls: Record<string, string>): string
     }
   };
   walk(tpl.content);
+  // 태그 사이의 공백·줄바꿈만 있는 글 조각은 지운다 (pre-wrap에서 빈 줄로 보이지 않게)
+  const isBlock = (n: Node | null) => !!n && n.nodeType === 1 && !["b", "i", "u", "s", "strong", "em", "small", "big", "sub", "sup", "mark", "span", "font", "q", "cite", "abbr", "del", "ins", "code", "ruby"].includes((n as Element).tagName.toLowerCase());
+  const prune = (node: Node) => {
+    for (const c of [...node.childNodes]) {
+      if (c.nodeType === 3 && !c.textContent!.trim() && c.textContent!.includes("\n") && (isBlock(c.previousSibling) || isBlock(c.nextSibling) || !c.previousSibling || !c.nextSibling)) c.remove();
+      else if (c.nodeType === 3) {
+        // 블록(그림·상자)과 맞닿은 쪽의 줄바꿈은 빈 줄이 되므로 지운다
+        let t = c.textContent!;
+        if (!c.previousSibling || isBlock(c.previousSibling)) t = t.replace(/^\s*\n/, "");
+        if (!c.nextSibling || isBlock(c.nextSibling)) t = t.replace(/\n\s*$/, "");
+        if (t !== c.textContent) c.textContent = t;
+      } else if (c.nodeType === 1) prune(c);
+    }
+  };
+  tpl.content.normalize(); // 벗겨 낸 태그 자리에서 쪼개진 글 조각 합치기
+  prune(tpl.content);
   return tpl.innerHTML;
 }
 
@@ -213,7 +354,7 @@ const RULE_HINT = /\{\{(?:img|image|asset|emotion|raw|path|bg)::|<img\b|<Emotion
 /** 봇 스스로 그림 쓰는 법을 정해 두었는지 (설명·로어북·스크립트에 그림 표시가 있으면) */
 export function hasOwnImageRules(ctx: StoryContext, pool: ImagePool): boolean {
   if (pool.scripts.some((s) => s.type !== "editinput" && (RULE_HINT.test(s.out) || /nvimg|<img/i.test(s.out)))) return true;
-  const texts = [...ctx.characters.flatMap((c) => [c.profile, c.speech, ...c.lore.map((l) => l.content)]), ...(ctx.world ? [ctx.world.description, ctx.world.rules, ...ctx.world.lore.map((l) => l.content)] : [])];
+  const texts = [...ctx.characters.flatMap((c) => [c.profile, c.speech, c.instructions ?? "", ...c.lore.map((l) => l.content)]), ...(ctx.world ? [ctx.world.description, ctx.world.rules, ...ctx.world.lore.map((l) => l.content)] : [])];
   return texts.some((t) => RULE_HINT.test(t));
 }
 

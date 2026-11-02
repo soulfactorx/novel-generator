@@ -82,7 +82,7 @@ export function buildNovelSystem(s: Settings, ctx: StoryContext, imageRules: str
   ].join("\n");
 }
 
-export function buildEpisodeRequest(s: Settings, n: Novel, ctx: StoryContext, index: number, opts: { lore?: string; note?: string; imageRules?: string[] } = {}): { system: string; messages: ChatMessage[] } {
+export function buildEpisodeRequest(s: Settings, n: Novel, ctx: StoryContext, index: number, opts: { lore?: string; note?: string; imageRules?: string[]; instructions?: string } = {}): { system: string; messages: ChatMessage[] } {
   const o = n.outline[index];
   const len = EPISODE_LENGTH[n.episodeLength];
   const written = n.episodes.slice(0, index);
@@ -95,6 +95,7 @@ export function buildEpisodeRequest(s: Settings, n: Novel, ctx: StoryContext, in
     tail && `## 직전 회차의 마지막 부분 (여기서 자연스럽게 이어 쓸 것)\n…${tail}`,
     opts.lore && `## 참고 설정 (이번 회차와 관련된 자료, 필요한 만큼만 반영)\n${opts.lore}`,
     `## 이번에 쓸 회차: ${index + 1}화 「${o.title}」\n${o.summary}`,
+    opts.instructions?.trim() && `## 설정에 정해진 지시 (반드시 따를 것)\n${opts.instructions.trim()}`,
     opts.note?.trim() && `## 작가의 추가 요청\n${opts.note.trim()}`,
     [
       "## 지시",

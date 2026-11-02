@@ -107,6 +107,7 @@ export interface Character extends EntityBase {
   lore: LoreEntry[];
   worldId?: string; // 소속 세계관 (선택)
   scripts?: RegexScript[]; // RisuAI 캐릭터의 정규식 스크립트
+  instructions?: string; // 응답 직전에 AI에게 주는 지시 (RisuAI post_history_instructions · @@depth 0 로어)
   emotionMode?: boolean; // RisuAI '감정 이미지' 화면: AI가 응답마다 <Emotion="이름">으로 감정 이미지를 고름
 }
 export interface Persona extends EntityBase {

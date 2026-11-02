@@ -37,3 +37,7 @@ body {
 .risu-html table { border-collapse: collapse; }
 .risu-html td, .risu-html th { border: 1px solid rgb(120 113 108 / 0.3); padding: 0.25rem 0.5rem; }
 .risu-html details { margin: 0.5rem 0; }
+/* 봇이 만든 블록(상태창 등) 안에서는 줄바꿈을 일반 HTML처럼 */
+.risu-html :is(div, table, section, ul, ol, details, figure, header, footer, article) { white-space: normal; }
+.risu-html style { display: none; }
+.risu-html > :is(div, table, details, figure) { margin-block: 0.75rem; }

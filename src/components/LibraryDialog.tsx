@@ -146,6 +146,9 @@ function CharacterForm({ c, worlds }: { c: Character; worlds: World[] }) {
       <F label="말투 · 대사 예시" hint="실제 대사 2~4줄을 적으면 말투가 가장 잘 유지됩니다.">
         <textarea className="input min-h-24" value={c.speech} onChange={(e) => up({ speech: e.target.value })} placeholder={'"규정은 규정입니다. 예외는 없어요."\n"…그래도, 오늘은 못 본 걸로 하죠."'} aria-label="말투 예시" />
       </F>
+      <F label="응답 직전 지시 (선택)" hint="AI가 응답(소설은 회차)을 쓰기 직전에 매번 전달됩니다. 상태창 형식, 그림 표시 규칙처럼 꼭 지켜야 하는 출력 규칙을 적습니다. RisuAI 카드의 post_history_instructions가 여기로 들어옵니다.">
+        <textarea className="input min-h-20" value={c.instructions ?? ""} onChange={(e) => up({ instructions: e.target.value })} aria-label="응답 직전 지시" />
+      </F>
       <LoreEditor entries={c.lore} onChange={(lore) => up({ lore })} />
       <ImageGallery ownerId={c.id} />
       <RisuSettings e={c} />

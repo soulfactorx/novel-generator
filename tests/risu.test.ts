@@ -96,8 +96,8 @@ describe("RisuAI 가져오기", () => {
     const r = await parseRisuFile("레인포트.risum", b);
     const w = r.library[0] as World;
     expect(w.kind).toBe("world");
-    expect(w.description).toBe("주인공가 사는 도시");
-    expect(w.lore.map((e) => [e.title, e.keys, !!e.always])).toEqual([["등불", ["등불", "마력등"], false], ["비", ["비"], true]]);
+    expect(w.description).toBe("### 비\n상시"); // 상시 로어는 설명으로 (모듈 설명은 화면 표시용)
+    expect(w.lore.map((e) => [e.title, e.keys, !!e.always])).toEqual([["등불", ["등불", "마력등"], false]]);
     expect(r.skipped).toEqual(["트리거 스크립트 2개"]); // 내용 없는 정규식 스크립트는 버림
     expect(w.scripts).toBeUndefined();
   });
@@ -106,11 +106,11 @@ describe("RisuAI 가져오기", () => {
     const r = parseRisuJson(cardV3)!;
     const c = r.library[0] as Character;
     expect(c).toMatchObject({ kind: "character", name: "서율", summary: "감찰관 · OC" });
-    expect(c.profile).toBe("서율는 조합 감찰관이다. 주인공의 상관.\n\n성격: 냉정함\n\n기본 상황: 비 오는 항구");
+    expect(c.profile).toBe("서율는 조합 감찰관이다. 주인공의 상관.\n\n성격: 냉정함\n\n기본 상황: 비 오는 항구\n\n### 날씨\n항상 비가 온다"); // 상시 로어는 프로필로
     expect(c.speech).toBe('서율: "규정은 규정입니다."');
-    expect(c.lore.map((e) => [e.title, e.content, e.enabled, !!e.always])).toEqual([["조합", "항구의 마법 조합", true, false], ["re", "정규식 로어", false, false], ["날씨", "항상 비가 온다", true, true]]);
+    expect(c.lore.map((e) => [e.title, e.content, e.enabled, !!e.always])).toEqual([["조합", "항구의 마법 조합", true, false], ["re", "정규식 로어", false, false]]);
     expect(r.greeting?.greetings).toEqual(["*서율가 서류를 내려놓는다.* 늦었군요, 주인공.", "서율: 또 만났네요."]);
-    expect(r.skipped).toEqual(["시스템 프롬프트", "트리거 스크립트 1개"]);
+    expect(r.skipped).toEqual(["트리거 스크립트 1개"]); // system_prompt가 {{original}}뿐이면 바꾸는 것이 없음
     expect(r.images).toEqual([]);
     const room = greetingRoom(r.greeting!, 1);
     expect(room.characterIds).toEqual([c.id]);
@@ -217,6 +217,32 @@ describe("RisuAI 내보내기", () => {
     const r = await parseRisuFile("레인포트.risum", writeRisum(worldToModule(w)));
     const back = r.library[0] as World;
     expect(back.name).toBe("레인포트");
-    expect(back.lore.map((e) => [e.title, !!e.always])).toEqual([["레인포트 설명", true], ["레인포트 규칙", true], ["등불", false]]);
+    expect(back.description).toBe("### 레인포트 설명\n비 오는 항구");
+    expect(back.rules).toBe("### 레인포트 규칙\n마법엔 대가"); // @@depth 0 → 규칙
+    expect(back.lore.map((e) => [e.title, !!e.always])).toEqual([["등불", false]]);
+  });
+});
+
+describe("RisuAI 봇: 설정이 상시 로어에, 그림 규칙이 post_history_instructions에 있는 경우", () => {
+  test("상시 로어 → 프로필, @@depth 0 상시 로어 + post_history_instructions → 응답 직전 지시, 키워드 로어는 로어북", () => {
+    const r = parseRisuJson({
+      spec: "chara_card_v3",
+      data: {
+        name: "부르봉", description: "", first_mes: "", alternate_greetings: ["인사 1", ""],
+        post_history_instructions: '<Image Commands>\n{{char}}의 표정을 <img src="A_B_C_D"> 로 출력\n</Image Commands>',
+        system_prompt: "{{original}}",
+        character_book: { entries: [
+          { keys: [""], content: "부르봉 설정", constant: true, comment: "미호노 부르봉" },
+          { keys: [""], content: "@@depth 0\n[체력:100% |…] 상태창을 맨 끝에", constant: true, comment: "상태창" },
+          { keys: ["데뷔"], content: "데뷔 레이스 설명", constant: false, comment: "데뷔레이스" },
+        ] },
+      },
+    })!;
+    const c = r.library[0] as Character;
+    expect(c.profile).toBe("### 미호노 부르봉\n부르봉 설정");
+    expect(c.instructions).toBe('<Image Commands>\n부르봉의 표정을 <img src="A_B_C_D"> 로 출력\n</Image Commands>\n\n### 상태창\n[체력:100% |…] 상태창을 맨 끝에');
+    expect(c.lore.map((l) => l.title)).toEqual(["데뷔레이스"]);
+    expect(r.greeting?.greetings).toEqual(["인사 1"]);
+    expect(r.skipped).toEqual([]); // {{original}}만 있는 system_prompt는 건너뛴 것이 아님
   });
 });

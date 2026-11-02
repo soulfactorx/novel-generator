@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { novelToEpub, novelToTxt } from "../src/lib/exporters";
-import { editDistance, findAsset, hasOwnImageRules, htmlToBlocks, imagePool, imagePromptSection, renderRisu, runScripts } from "../src/lib/images";
+import { editDistance, findAsset, hasOwnImageRules, htmlToBlocks, imagePool, imagePromptSection, renderRisu, runScripts, scopeCss } from "../src/lib/images";
 import { buildEpisodeRequest } from "../src/lib/novel";
-import { buildSystemPrompt } from "../src/lib/prompt";
+import { buildSystemPrompt, instructionsOf } from "../src/lib/prompt";
 import { listZip } from "../src/lib/unzip";
 import { DEFAULT_SETTINGS, normalizeNovel, type Character, type ImageMeta, type RegexScript, type Room } from "../src/lib/types";
 
@@ -106,4 +106,62 @@ describe("내보내기", () => {
     expect(ch).toContain('media-type="image/png"');
     expect(novelToTxt(n, ex)).toContain("앞\n\n뒤");
   });
+});
+
+describe("실제 RisuAI 봇 구조 (부르봉과 라이스샤워 charx 분석 기반)", () => {
+  // 이름 형식: 인물_구분_복장_표정
+  const names = ["bourbon_sfw_school_standing", "bourbon_sfw_school_smile", "bourbon_sfw_school_admiring", "bourbon_sfw_school_happy smile", "bourbon_sfw_school_sad", "bourbon_sfw_gym_smile", "rice_sfw_casual_looking away shyly", "rice_sfw_race_proud1"];
+  const list = names.map((n, i) => img(`i${i}`, n));
+  const name = (q: string) => list.find((m) => m.id === findAsset(q, list)?.id)?.name ?? null;
+  test("이름 찾기: 밑줄↔공백, 앞부분 일치, 표정만 비슷, 없는 복장은 같은 인물의 다른 복장, 다른 감정은 고르지 않음", () => {
+    expect(name("rice_sfw_casual_looking_away_shyly")).toBe("rice_sfw_casual_looking away shyly");
+    expect(name("bourbon_sfw_school_happy")).toBe("bourbon_sfw_school_happy smile");
+    expect(name("bourbon_sfw_school_smiling")).toBe("bourbon_sfw_school_smile"); // admiring 아님
+    expect(name("bourbon_sfw_swimsuit_smile")).toMatch(/^bourbon_sfw_(school|gym)_smile$/); // 수영복 그림이 없으면 같은 인물의 smile
+    expect(name("Rice_SFW_Race_Proud")).toBe("rice_sfw_race_proud1");
+    expect(name("bourbon_sfw_school_melancholic")).toBeNull(); // sad로 바꾸지 않음
+  });
+  test('<img src="에셋이름"> 은 봇 스크립트 없이도 그림으로, 주소(https·data)는 그대로', () => {
+    const pool = imagePool({ characters: [char()] }, list);
+    const r = renderRisu('앞\n\n<img src="bourbon_sfw_school_standing">\n\n<img="rice_sfw_race_proud1">\n<img src="https://x/y.png"> <img src="없는그림">', pool);
+    expect(r.ids.sort()).toEqual(["i0", "i7"]);
+    expect(r.html).toContain('<img src="nvimg:i0">');
+    expect(r.html).toContain('src="nvimg:i7"');
+    expect(r.html).toContain('src="https://x/y.png"'); // 안전 처리 단계에서 지워짐
+  });
+  test("봇 스크립트가 <img src> 를 {{raw::}} 로 감싸는 경우 (charx module.risum의 '에셋' 스크립트)", () => {
+    const c = char({ updatedAt: 5, scripts: [sc({ in: '<img src="(.*?)">', out: '<style>.container{display:grid}</style><div class="container"><img class="roundedImage" src="{{raw::$1}}"></div>' })] });
+    const r = renderRisu('<img src="bourbon_sfw_gym_smile">', imagePool({ characters: [c] }, list));
+    expect(r.ids).toEqual(["i5"]);
+    expect(r.html).toContain('<img class="roundedImage" src="nvimg:i5">');
+  });
+  test("상태창 <style>: 이 메시지 범위로 한정, body·@import·외부 url·fixed 제거, @media 유지", () => {
+    const css = `@import url('https://fonts.googleapis.com/x'); body { min-height:100vh; background:#707090 } .status-window, .bar:hover { background-color:#13a9b0; position: fixed; color: red } @media (max-width:600px){ .stat-item{ padding:2px } } @font-face{font-family:x;src:url(https://x)} .bg{background:url(https://evil/x.png)} @keyframes k{from{opacity:0}to{opacity:1}}`;
+    const out = scopeCss(css, "rs1");
+    expect(out).not.toContain("@import");
+    expect(out).not.toMatch(/rs1 body|min-height/);
+    expect(out).toContain(".rs1 .status-window,.rs1 .bar:hover{");
+    expect(out).toContain("background-color:#13a9b0");
+    expect(out).not.toContain("fixed");
+    expect(out).toContain("@media (max-width:600px){.rs1 .stat-item{");
+    expect(out).not.toContain("font-face");
+    expect(out).not.toContain("evil");
+    expect(out).toContain("@keyframes k{");
+  });
+  test("응답 직전 지시는 대화·소설 모두에 전달", () => {
+    const c = char({ instructions: '<Image Commands>\n<img src="A_B_C_D"> 형식으로 출력\n</Image Commands>' });
+    expect(instructionsOf({ characters: [c] })).toContain("<Image Commands>");
+    expect(instructionsOf({ characters: [c, char({ id: "d", name: "라이스", instructions: "상태창 출력" })] })).toContain("[라이스]\n상태창 출력");
+    const n = normalizeNovel({ id: "n", title: "T", author: "", genre: "", brief: "b", characterIds: ["c"], episodeCount: 1, episodeLength: "short", outline: [{ id: "o", title: "1화", summary: "s" }], episodes: [], createdAt: 0, updatedAt: 0 });
+    const req = buildEpisodeRequest(DEFAULT_SETTINGS, n, { characters: [c] }, 0, { instructions: instructionsOf({ characters: [c] }) });
+    expect(String(req.messages[0].content)).toContain("## 설정에 정해진 지시 (반드시 따를 것)\n<Image Commands>");
+    // 봇 규칙이 지시에 있으면 '봇 규칙을 따르라'로 안내
+    expect(hasOwnImageRules({ characters: [c] }, imagePool({ characters: [c] }, list))).toBe(true);
+  });
+});
+
+test("CSS: 주소 안의 ; { } 와 따옴표 때문에 규칙이 깨지지 않는다 (실제 봇의 @import 구글 폰트)", () => {
+  const css = "@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap');\nbody { margin: 0 }\n.status-window { background-color: #13a9b0; content: \"a;b}c\" }\n.x{color:red}";
+  const out = scopeCss(css, "rs1");
+  expect(out).toBe('.rs1 .status-window{ background-color: #13a9b0; content: "a;b}c" }.rs1 .x{color:red}');
 });

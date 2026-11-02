@@ -95,6 +95,14 @@ export function contextSections(ctx: StoryContext, mode: "chat" | "novel"): stri
   return parts;
 }
 
+/** 등장인물의 '응답 직전 지시' (RisuAI post_history_instructions 등) */
+export function instructionsOf(ctx: StoryContext): string {
+  return ctx.characters
+    .filter((c) => c.instructions?.trim())
+    .map((c) => (ctx.characters.length > 1 ? `[${c.name}]\n${c.instructions!.trim()}` : c.instructions!.trim()))
+    .join("\n\n");
+}
+
 /** AI에게 보낼 대화: 최근 N개, 오류 메시지 제외, 첫 메시지는 user 로 시작 */
 export function buildHistory(room: Room, limit: number): { role: "user" | "assistant"; content: string }[] {
   const msgs = room.messages.filter((m) => !m.error && m.text.trim());

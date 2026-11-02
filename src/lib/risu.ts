@@ -78,13 +78,30 @@ interface RawLore {
   enabled: boolean;
   regex: boolean;
 }
-function toLore(r: RawLore, name: string): LoreEntry | null {
+/** late: @@depth 0~2 데코레이터 — RisuAI에서 대화 맨 끝(응답 직전)에 넣는 항목 */
+type ImportedLore = LoreEntry & { late?: true };
+function toLore(r: RawLore, name: string): ImportedLore | null {
+  const late = /^@@@?depth\s+[0-2]\b/m.test(r.content);
   const content = fillMacros(stripDecorators(r.content), name);
   if (!content) return null;
   // 정규식 키는 이 앱에서 매칭할 수 없음 → 키 없이 꺼 둔 상태로 보관
   const keys = r.regex ? [] : [...new Set(r.keys.map((k) => fillMacros(k, name)).filter(Boolean))];
   const always = r.always || (!r.regex && !keys.length);
-  return { id: uid("l"), title: fillMacros(r.title, name) || keys[0] || "", keys, content, enabled: r.enabled && !(r.regex && !r.always), ...(always ? { always: true } : {}) };
+  return { id: uid("l"), title: fillMacros(r.title, name) || keys[0] || "", keys, content, enabled: r.enabled && !(r.regex && !r.always), ...(always ? { always: true } : {}), ...(late ? { late: true as const } : {}) };
+}
+/**
+ * 상시(항상 켜짐) 로어는 이 앱의 로어북 글자 예산에 걸리지 않도록 본문으로 옮긴다.
+ * RisuAI 봇은 설명을 비우고 설정 전부를 상시 로어에 넣는 경우가 많다.
+ *  - body: 프로필(세계관 설명)로 / late(@@depth 0~2): 응답 직전 지시로 / lore: 키워드 로어로 남김
+ */
+function splitLore(list: ImportedLore[]): { body: string; late: string; lore: LoreEntry[] } {
+  const sec = (l: LoreEntry) => (l.title ? `### ${l.title}\n${l.content}` : l.content);
+  const on = (l: ImportedLore) => l.always && l.enabled;
+  return {
+    body: list.filter((l) => on(l) && !l.late).map(sec).join("\n\n"),
+    late: list.filter((l) => on(l) && l.late).map(sec).join("\n\n"),
+    lore: list.filter((l) => !on(l)).map(({ late: _, ...l }) => l),
+  };
 }
 const splitKeys = (s: string) => s.split(",").map((k) => k.trim()).filter(Boolean);
 
@@ -93,14 +110,14 @@ const fromRisuLore = (list: unknown, name: string) =>
   arr(list)
     .filter((e) => e.mode !== "folder")
     .map((e) => toLore({ title: str(e.comment), keys: splitKeys(str(e.key)), content: str(e.content), always: !!e.alwaysActive || e.mode === "constant", enabled: true, regex: !!e.useRegex }, name))
-    .filter((x): x is LoreEntry => !!x);
+    .filter((x): x is ImportedLore => !!x);
 
 /** Character Card V2/V3 character_book 항목 */
 const fromCardLore = (list: unknown, name: string) =>
   arr(list)
     .filter((e) => e.extensions?.risu_folder !== true && e.mode !== "folder")
     .map((e) => toLore({ title: str(e.comment) || str(e.name), keys: strs(e.keys).length ? strs(e.keys) : splitKeys(str(e.keys)), content: str(e.content), always: !!e.constant, enabled: e.enabled !== false, regex: !!e.use_regex }, name))
-    .filter((x): x is LoreEntry => !!x);
+    .filter((x): x is ImportedLore => !!x);
 
 /** SillyTavern world info 등 외부 로어북 (entries: 객체 또는 배열) */
 const fromExternalLore = (entries: unknown, name: string) =>
@@ -183,9 +200,11 @@ function moduleToWorld(m: Any, source: string, assetData: Uint8Array[] = []): Ri
   });
   const names = images.map((x) => x.name);
   const fix = (t: string) => fillAssetLists(fillMacros(t, name), names, []);
-  const lore = fromRisuLore(m.lorebook, name).map((l) => ({ ...l, content: fillAssetLists(l.content, names, []) }));
+  const parts = splitLore(fromRisuLore(m.lorebook, name));
+  const lore = parts.lore.map((l) => ({ ...l, content: fillAssetLists(l.content, names, []) }));
   const scripts = toScripts(m.regex);
-  const world: World = { kind: "world", id, name, description: fix(str(m.description)), rules: "", lore, ...(scripts.length ? { scripts } : {}), createdAt: now, updatedAt: now };
+  // 모듈 설명은 RisuAI에서 화면 표시용이라, 상시 로어가 있으면 그것을 세계관 설명으로 쓴다
+  const world: World = { kind: "world", id, name, description: fillAssetLists(parts.body, names, []) || fix(str(m.description)), rules: fillAssetLists(parts.late, names, []), lore, ...(scripts.length ? { scripts } : {}), createdAt: now, updatedAt: now };
   return { source, library: [world], rooms: [], images, skipped: skippedOf(m, other) };
 }
 
@@ -224,7 +243,11 @@ function cardToCharacter(cardIn: Any, source: string, moduleLore?: { module: Any
     .trim();
   // charx: module.risum 의 로어북이 있으면 그것이 기준(RisuAI와 같음), 없으면 카드의 character_book
   const modLore = moduleLore ? fromRisuLore(moduleLore.module.lorebook, name) : [];
-  const lore = modLore.length ? modLore : fromCardLore(card.character_book?.entries, name);
+  const parts = splitLore(modLore.length ? modLore : fromCardLore(card.character_book?.entries, name));
+  const lore = parts.lore;
+  // 응답 직전 지시: post_history_instructions + @@depth 0 상시 로어 (이미지 사용 규칙이 여기 있는 봇이 많다)
+  const sys = fillMacros(str(card.system_prompt), name);
+  const instructions = [fillMacros(str(card.post_history_instructions), name), parts.late].filter(Boolean).join("\n\n");
   const now = Date.now();
   const tags = strs(card.tags).slice(0, 5);
   const id = uid("c");
@@ -236,7 +259,8 @@ function cardToCharacter(cardIn: Any, source: string, moduleLore?: { module: Any
   // charx: 정규식 스크립트는 module.risum 으로 옮겨져 있음
   const scripts = [...toScripts(risu.customScripts), ...toScripts(moduleLore?.module.regex)];
   const ch: Character = {
-    kind: "character", id, name, summary: str(card.nickname).trim() || tags.join(" · "), profile: fix(profile), speech: fix(speech),
+    kind: "character", id, name, summary: str(card.nickname).trim() || tags.join(" · "), profile: fix([profile, parts.body].filter(Boolean).join("\n\n")), speech: fix(speech),
+    ...(instructions ? { instructions: fix(instructions) } : {}),
     lore: lore.map((l) => ({ ...l, content: fix(l.content) })),
     ...(scripts.length ? { scripts } : {}),
     ...(risu.viewScreen === "emotion" && emoNames.length ? { emotionMode: true } : {}),
@@ -244,7 +268,8 @@ function cardToCharacter(cardIn: Any, source: string, moduleLore?: { module: Any
   };
   const greetings = [str(card.first_mes) || str(card.char_greeting), ...strs(card.alternate_greetings)].map((g) => fix(fillMacros(g, name))).filter(Boolean);
   const skipped = skippedOf({ ...risu, ...(moduleLore?.module || {}) }, other);
-  if (str(card.system_prompt).trim() || str(card.post_history_instructions).trim()) skipped.unshift("시스템 프롬프트");
+  // system_prompt는 RisuAI의 기본 프롬프트를 통째로 바꾸는 용도라 쓰지 않음 ({{original}}만 있으면 바꾸는 것이 없음)
+  if (sys.replace(/\{\{original\}\}/gi, "").trim()) skipped.unshift("시스템 프롬프트(기본 프롬프트 교체)");
   return { source, library: [ch], rooms: [], images, ...(greetings.length ? { greeting: { characterId: ch.id, name, greetings } } : {}), skipped };
 }
 
@@ -402,6 +427,6 @@ export function characterToCharx(c: Character, world?: World): Uint8Array {
 
 /** 세계관 → RisuAI 모듈 (.risum). 설명·규칙은 '항상' 로어로 넣는다. */
 export function worldToModule(w: World) {
-  const base: LoreEntry[] = [w.description.trim() && { id: "d", title: `${w.name} 설명`, keys: [], content: w.description.trim(), enabled: true, always: true }, w.rules.trim() && { id: "r", title: `${w.name} 규칙`, keys: [], content: w.rules.trim(), enabled: true, always: true }].filter(Boolean) as LoreEntry[];
+  const base: LoreEntry[] = [w.description.trim() && { id: "d", title: `${w.name} 설명`, keys: [], content: w.description.trim(), enabled: true, always: true }, w.rules.trim() && { id: "r", title: `${w.name} 규칙`, keys: [], content: `@@depth 0\n${w.rules.trim()}`, enabled: true, always: true }].filter(Boolean) as LoreEntry[];
   return { name: w.name, description: w.description.slice(0, 200), id: uid("risu"), lorebook: toRisuLore([...base, ...w.lore.filter((e) => e.enabled)]) };
 }

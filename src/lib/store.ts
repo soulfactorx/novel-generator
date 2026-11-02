@@ -7,7 +7,7 @@ import { libraryFromExtra, type LegacyImport } from "./importLegacy";
 import { greetingRoom, type RisuImage, type RisuImport } from "./risu";
 import { formatLore, matchLore, type LoreHit } from "./lore";
 import { buildMemoryRequest, cleanMemory, pendingForMemory } from "./memory";
-import { buildHistory, buildSystemPrompt, outputTokensFor, type StoryContext } from "./prompt";
+import { buildHistory, buildSystemPrompt, instructionsOf, outputTokensFor, type StoryContext } from "./prompt";
 import { generate, ProviderError, type GenerateRequest, type GenerateResult, type Usage } from "./providers";
 import { emptyUsage, recordUsage, type UsageData, type UsageKind } from "./usage";
 import { buildEpisodeDiagnosis, buildRoomDiagnosis, splitDiagnosis } from "./diagnose";
@@ -506,6 +506,12 @@ async function runGeneration(roomId: string, note = "") {
     const last = history[history.length - 1];
     history[history.length - 1] = { ...last, content: `${last.content}\n\n<참고 설정: 이번 장면과 관련된 자료. 필요한 만큼만 자연스럽게 반영하고 그대로 옮겨 쓰지 말 것>\n${formatLore(lore)}\n</참고 설정>` };
   }
+  // 설정의 응답 직전 지시 (RisuAI post_history_instructions): 마지막 입력 뒤에 붙인다
+  const instr = instructionsOf(ctx);
+  if (instr) {
+    const last = history[history.length - 1];
+    history[history.length - 1] = { ...last, content: `${last.content}\n\n<설정 지시: 이번 응답에서 반드시 따를 것>\n${instr}\n</설정 지시>` };
+  }
   if (note.trim()) {
     const last = history[history.length - 1];
     history[history.length - 1] = { ...last, content: `${last.content}\n\n<작가 지시: 이번 응답에 반영할 것>\n${note.trim()}\n</작가 지시>` };
@@ -728,7 +734,7 @@ export async function writeEpisode(novelId: string, index: number, note = "", un
     const scan = [n.outline[index].title, n.outline[index].summary, n.episodes[index - 1]?.text.slice(-1500) ?? ""].join("\n");
     const lore = groups.length ? formatLore(matchLore(groups, scan)) : "";
     const res = await callAI("episode", {
-      ...buildEpisodeRequest(s, n, ctx, index, { lore, note, imageRules: imagePromptSection(ctx, pool, "novel") }),
+      ...buildEpisodeRequest(s, n, ctx, index, { lore, note, imageRules: imagePromptSection(ctx, pool, "novel"), instructions: instructionsOf(ctx) }),
       maxTokens: EPISODE_LENGTH[n.episodeLength].tokens,
       signal: novelController.signal,
       onText: (d) => novelLiveSet({ text: previewEpisode((streamed += d)) }),
