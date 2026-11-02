@@ -16,7 +16,7 @@ export interface MessageActions {
   onRewind?: () => void;
 }
 
-export default function MessageView({ m, pool, cbs, onTrigger, onDelete, onEdit, onRetry, onBookmark, onBranch, onRewind }: { m: Message; pool?: ImagePool; cbs?: (s: string) => string; onTrigger?: (name: string, id: string | null) => void } & MessageActions) {
+export default function MessageView({ m, pool, cbs, onTrigger, luaDisplay, onDelete, onEdit, onRetry, onBookmark, onBranch, onRewind }: { m: Message; pool?: ImagePool; cbs?: (s: string) => string; onTrigger?: (name: string, id: string | null) => void; luaDisplay?: (t: string) => Promise<string> } & MessageActions) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(m.text);
   const [showThink, setShowThink] = useState(false);
@@ -59,7 +59,7 @@ export default function MessageView({ m, pool, cbs, onTrigger, onDelete, onEdit,
           ) : user ? (
             <div className="whitespace-pre-wrap break-words text-sm">{m.text}</div>
           ) : (
-            <RisuText text={m.text} pool={pool} cbs={cbs} onTrigger={onTrigger} />
+            <RisuText text={m.text} pool={pool} cbs={cbs} onTrigger={onTrigger} luaDisplay={luaDisplay} />
           )}
         </div>
         {!editing && (

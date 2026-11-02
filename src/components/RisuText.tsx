@@ -1,4 +1,4 @@
-import { useId, useMemo, type MouseEvent } from "react";
+import { useEffect, useId, useMemo, useState, type MouseEvent } from "react";
 import { hasMarkup, poolIsEmpty, renderRisu, sanitizeHtml, type ImagePool } from "../lib/images";
 import { useImageUrls } from "../lib/imageUrls";
 import { inlineMarkdown } from "../lib/markdown";
@@ -10,7 +10,18 @@ import StoryText from "./StoryText";
  * 그림 표시({{img::}} · <img src="이름"> · <Emotion>) → 마크다운 → 안전한 HTML.
  * 봇 버튼(risu-trigger)을 누르면 onTrigger로 알린다.
  */
-export default function RisuText({ text, pool, cbs, onTrigger }: { text: string; pool?: ImagePool; cbs?: (s: string) => string; onTrigger?: (name: string, id: string | null) => void }) {
+export default function RisuText({ text: raw, pool, cbs, onTrigger, luaDisplay }: { text: string; pool?: ImagePool; cbs?: (s: string) => string; onTrigger?: (name: string, id: string | null) => void; luaDisplay?: (t: string) => Promise<string> }) {
+  // 봇 Lua의 editDisplay (비동기): 결과가 오면 그것으로 다시 그림
+  const [lua, setLua] = useState<{ src: string; fn: unknown; out: string } | null>(null);
+  useEffect(() => {
+    if (!luaDisplay) return;
+    let alive = true;
+    void luaDisplay(raw).then((out) => alive && setLua({ src: raw, fn: luaDisplay, out }));
+    return () => {
+      alive = false;
+    };
+  }, [raw, luaDisplay]);
+  const text = luaDisplay && lua?.src === raw && lua.fn === luaDisplay ? lua.out : raw;
   const images = useApp((s) => s.images);
   const markdown = useApp((s) => s.settings.risu.markdown);
   const scope = "rs" + useId().replace(/[^a-z0-9]/gi, ""); // 봇 <style>을 이 메시지 안으로 한정
@@ -27,7 +38,9 @@ export default function RisuText({ text, pool, cbs, onTrigger }: { text: string;
     const el = (e.target as HTMLElement).closest("[risu-trigger],[risu-btn]") as HTMLElement | null;
     if (!el || !onTrigger) return;
     e.preventDefault();
-    onTrigger(el.getAttribute("risu-trigger") ?? el.getAttribute("risu-btn") ?? "", el.getAttribute("risu-id"));
+    const trig = el.getAttribute("risu-trigger");
+    // risu-trigger: 그 이름의 트리거(Lua 함수) / risu-btn: Lua onButtonClick(값)
+    onTrigger(trig ?? `__btn:${el.getAttribute("risu-btn") ?? ""}`, el.getAttribute("risu-id"));
   };
   return <div className={`story risu-html whitespace-pre-wrap ${scope}`} onClick={click} dangerouslySetInnerHTML={{ __html: sanitizeHtml(tidy(html), urls, scope) }} />;
 }

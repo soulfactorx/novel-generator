@@ -89,6 +89,11 @@ export interface LoreEntry {
   content: string;
   enabled: boolean;
   always?: boolean;
+  /** RisuAI 로어 규칙 (선택) */
+  secondKeys?: string[]; // 보조 키: 주 키와 보조 키가 모두 나와야 전달
+  regex?: boolean; // 키를 /정규식/플래그 로 검사
+  order?: number; // 넣는 순서·우선순위 (높을수록 먼저, 글자 예산이 모자라면 낮은 것부터 뺌)
+  decorators?: string; // @@activate_only_after 3 같은 RisuAI 데코레이터 줄
 }
 interface EntityBase {
   id: string;

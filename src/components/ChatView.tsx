@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { downloadBlob, roomToTxt, safeFileName } from "../lib/exporters";
-import { branchRoom, contextFor, displayCbs, runRisuTrigger, deleteMessage, diagnoseRoom, dismissMemoryError, editMessage, novelFromRoom, regenerate, rewindTo, selectRoom, send, setBookmark, stopGeneration, updateRoom, useApp } from "../lib/store";
+import { branchRoom, contextFor, displayCbs, displayLua, runRisuTrigger, deleteMessage, diagnoseRoom, dismissMemoryError, editMessage, novelFromRoom, regenerate, rewindTo, selectRoom, send, setBookmark, stopGeneration, updateRoom, useApp } from "../lib/store";
 import DiagnosisDialog from "./DiagnosisDialog";
 import Dialog from "./Dialog";
 import { PROVIDER_LABEL } from "../lib/providers/catalog";
 import MessageView from "./Message";
 import RisuText from "./RisuText";
-import { imagePool } from "../lib/images";
+import { imagePool, sanitizeHtml } from "../lib/images";
 import RoomDialog from "./RoomDialog";
 import TogglePanel from "./TogglePanel";
 import { togglesOf } from "../lib/risuRuntime";
@@ -24,6 +24,8 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
   const rooms = useApp((s) => s.rooms);
   const lib = useApp((s) => s.library);
   const images = useApp((s) => s.images);
+  useApp((s) => s.globals); // 토글이 바뀌면 다시 그림
+  useApp((s) => s.risuTick); // 봇이 reloadDisplay를 부르면 다시 그림
   const memoryJob = useApp((s) => s.memoryJob);
   const endRef = useRef<HTMLDivElement>(null);
   const busy = live !== null;
@@ -49,7 +51,11 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
 
   const last = room.messages[room.messages.length - 1];
   const ctx = contextFor(room, lib);
-  const pool = imagePool(ctx, images);
+  const pool = imagePool(ctx, images, settings.risu.scripts);
+  // 봇의 배경 HTML·CSS (RisuAI backgroundHTML): 이 이야기 화면 안에서만 적용
+  const bgScope = `rsbg${room.id.replace(/[^a-z0-9]/gi, "")}`;
+  const bgSrc = settings.risu.background ? [...ctx.characters, ...(ctx.world ? [ctx.world] : [])].map((o) => o.risu?.backgroundHTML ?? "").filter((x) => x.trim()).join("\n") : "";
+  const bgHtml = bgSrc ? sanitizeHtml(displayCbs(room, null)?.(bgSrc) ?? bgSrc, {}, bgScope) : "";
   const myMemory = memoryJob?.roomId === room.id ? memoryJob : null;
   const submit = (text: string) => {
     if (busy || (!text.trim() && room.messages.length > 0)) return;
@@ -73,7 +79,8 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
           <button className="btn-ghost hidden px-2 text-xs sm:inline-flex" onClick={() => onOpenSettings("ai")} title="AI 모델">{PROVIDER_LABEL[settings.provider]} · {settings.models[settings.provider]}</button>
         </>
       } />
-      <div className="flex-1 overflow-y-auto">
+      <div className={`relative flex-1 overflow-y-auto ${bgScope}`}>
+        {bgHtml && <div className="risu-bg" aria-hidden="true" dangerouslySetInnerHTML={{ __html: bgHtml }} />}
         <div className="mx-auto max-w-3xl space-y-6 px-4 py-6">
           {room.branchOf && (
             <div className="text-xs text-stone-500">
@@ -93,6 +100,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
               m={m}
               pool={pool}
               cbs={displayCbs(room, m.id)}
+              luaDisplay={displayLua(room, m.id)}
               onTrigger={(name, id) => void runRisuTrigger(room.id, name, id)}
               onDelete={() => deleteMessage(room.id, m.id)}
               onEdit={(t) => editMessage(room.id, m.id, t)}

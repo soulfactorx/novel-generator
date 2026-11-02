@@ -41,3 +41,6 @@ body {
 .risu-html :is(div, table, section, ul, ol, details, figure, header, footer, article) { white-space: normal; }
 .risu-html style { display: none; }
 .risu-html > :is(div, table, details, figure) { margin-block: 0.75rem; }
+/* 봇 배경 HTML (RisuAI backgroundHTML): 메시지 뒤에 깔림 */
+.risu-bg { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.risu-bg ~ * { position: relative; z-index: 1; }

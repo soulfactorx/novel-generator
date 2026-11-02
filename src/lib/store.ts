@@ -47,7 +47,14 @@ export interface AppState {
   sync: SyncStatus;
   images: Record<string, ImageMeta>; // 이미지 정보 (바이트는 필요할 때 IndexedDB에서)
   globals: Record<string, string>; // RisuAI 전역 변수 (토글: toggle_키) — 이 기기에 저장
+  risuDialog: RisuDialog | null; // 봇(Lua·트리거)이 띄운 알림·입력 창
+  risuTick: number; // 봇이 화면 다시 그리기를 요청할 때 증가
 }
+export type RisuDialog =
+  | { kind: "normal" | "error"; message: string; resolve: () => void }
+  | { kind: "input"; message: string; resolve: (v: string | null) => void }
+  | { kind: "confirm"; message: string; resolve: (v: boolean) => void }
+  | { kind: "select"; message: string; options: string[]; resolve: (v: string | null) => void };
 export interface SyncStatus {
   connected: boolean;
   auto: boolean;
@@ -80,7 +87,7 @@ export interface NovelLive {
   startedAt: number;
 }
 
-let state: AppState = { ready: false, storageError: "", settings: DEFAULT_SETTINGS, rooms: {}, library: {}, activeRoomId: null, live: null, memoryJob: null, lastUsage: null, legacyExtra: null, view: "rooms", novels: {}, activeNovelId: null, novelLive: null, novelError: null, usage: emptyUsage(), sync: { connected: false, auto: false, encrypted: false, running: false }, images: {}, globals: {} };
+let state: AppState = { ready: false, storageError: "", settings: DEFAULT_SETTINGS, rooms: {}, library: {}, activeRoomId: null, live: null, memoryJob: null, lastUsage: null, legacyExtra: null, view: "rooms", novels: {}, activeNovelId: null, novelLive: null, novelError: null, usage: emptyUsage(), sync: { connected: false, auto: false, encrypted: false, running: false }, images: {}, globals: {}, risuDialog: null, risuTick: 0 };
 const subs = new Set<() => void>();
 const dirty = { rooms: new Set<string>(), library: new Set<string>(), novels: new Set<string>() };
 const deleted = { rooms: new Set<string>(), library: new Set<string>(), novels: new Set<string>() };
@@ -474,10 +481,164 @@ export function displayCbs(room: Room, msgId: string | null): ((t: string) => st
   return fn;
 }
 
-/** 봇 버튼(risu-trigger) 실행 — Lua 트리거로 처리 (lua.ts) */
+/** 봇 버튼(risu-trigger · risu-btn) 실행 */
 export async function runRisuTrigger(roomId: string, name: string, id: string | null): Promise<void> {
-  const { runButton } = await import("./risuLua");
-  await runButton(roomId, name, id);
+  await runRoomTrigger(roomId, "manual", { manualName: name, triggerId: id });
+}
+
+/* ---------------- RisuAI 트리거 · Lua ---------------- */
+/** 봇이 띄우는 알림·입력 창 (화면의 RisuDialogView가 보여 줌) */
+function askDialog<T>(d: (resolve: (v: T) => void) => RisuDialog): Promise<T> {
+  return new Promise<T>((resolve) => setState({ risuDialog: d((v: T) => (setState({ risuDialog: null }), resolve(v))) }));
+}
+function triggersOf(room: Pick<Room, "worldId" | "personaId" | "characterIds">) {
+  const ctx = contextFor(room);
+  const owners = [...ctx.characters, ...(ctx.world ? [ctx.world] : [])];
+  return owners.flatMap((o) => (o.risu?.triggers ?? []).map((t) => ({ ...(t as object), lowLevelAccess: !!o.risu?.lowLevelAccess }) as { comment?: string; type?: string; conditions?: unknown[]; effect?: { type?: string; code?: string }[]; lowLevelAccess: boolean }));
+}
+/** 이야기방 → Lua·트리거가 다루는 형태 (첫 메시지 제외, 변수는 vars 객체에 기록) */
+function hostFor(room: Room, vars: Record<string, string>) {
+  const ctx = contextFor(room);
+  const { first, rest } = splitGreetingRoom(room);
+  const env = envFor(room, { vars });
+  const c0 = ctx.characters[0];
+  return {
+    chat: rest.map((m) => ({ role: (m.role === "user" ? "user" : "char") as "user" | "char", data: m.text, time: m.createdAt })),
+    getVar: (k: string) => env.getVar(k),
+    setVar: (k: string, v: string) => {
+      const changed = vars[k] !== v;
+      vars[k] = v;
+      return changed;
+    },
+    getGlobal: (k: string) => state.globals[k] ?? "null",
+    cbs: (t: string) => cbs(t, env),
+    alertNormal: (message: string) => void askDialog<void>((resolve) => ({ kind: "normal", message, resolve })),
+    alertError: (message: string) => void askDialog<void>((resolve) => ({ kind: "error", message, resolve })),
+    alertInput: (message: string) => askDialog<string | null>((resolve) => ({ kind: "input", message, resolve })),
+    alertSelect: (options: string[]) => askDialog<string | null>((resolve) => ({ kind: "select", message: "선택하세요", options, resolve })),
+    alertConfirm: (message: string) => askDialog<boolean>((resolve) => ({ kind: "confirm", message, resolve })),
+    reload: () => setState((st) => ({ risuTick: st.risuTick + 1 })),
+    name: c0?.name,
+    description: c0?.profile,
+    firstMessage: first?.text ?? c0?.greetings?.[0],
+    personaName: ctx.persona?.name,
+    personaDescription: ctx.persona?.profile,
+    authorsNote: room.premise,
+    backgroundEmbedding: c0?.risu?.backgroundHTML,
+    lore: ctx.characters.flatMap((c) => c.lore.map((l) => ({ comment: l.title, content: l.content, key: l.keys.join(", "), alwaysActive: !!l.always }))),
+    llm: async (prompt: { role: string; content: string }[]) => {
+      const sys = prompt.filter((p) => p.role === "system").map((p) => p.content).join("\n\n");
+      const res = await callAI("chat", { system: sys, messages: prompt.filter((p) => p.role !== "system").map((p) => ({ role: p.role === "user" ? "user" : "assistant", content: p.content })) as { role: "user" | "assistant"; content: string }[], maxTokens: 4000 });
+      return res.text;
+    },
+  };
+}
+const splitGreetingRoom = (room: Pick<Room, "messages">) => {
+  const first = room.messages[0]?.greeting ? room.messages[0] : undefined;
+  return { first, rest: room.messages.filter((m) => m !== first && !m.error) };
+};
+/** Lua·트리거가 바꾼 대화를 이야기방 메시지로 (같은 자리·같은 역할이면 기존 메시지를 고쳐 id·사용량 등 유지) */
+function applyChat(room: Room, chat: { role: "user" | "char"; data: string }[]): Message[] {
+  const { first, rest } = splitGreetingRoom(room);
+  const errors = room.messages.filter((m) => m.error);
+  const out: Message[] = chat.map((c, i) => {
+    const old = rest[i];
+    const role = c.role === "user" ? "user" : "assistant";
+    if (old && old.role === role) return old.text === c.data ? old : { ...old, text: c.data };
+    return { id: uid("m"), role, text: c.data, createdAt: (rest[rest.length - 1]?.createdAt ?? Date.now()) + i + 1 };
+  });
+  return [...(first ? [first] : []), ...out, ...errors];
+}
+
+export interface TriggerRun {
+  stop: boolean;
+  systemPrompt?: { start: string; historyend: string; promptend: string };
+}
+/**
+ * 이야기방의 RisuAI 트리거 실행 (Lua + 블록 트리거).
+ * mode: start(보내기 직전) · input(내 입력 후) · output(응답 후) · manual(버튼)
+ */
+export async function runRoomTrigger(roomId: string, mode: "start" | "input" | "output" | "manual", arg: { manualName?: string; triggerId?: string | null } = {}): Promise<TriggerRun> {
+  const room = state.rooms[roomId];
+  const s = state.settings.risu;
+  if (!room) return { stop: false };
+  const triggers = triggersOf(room);
+  if (!triggers.length || (!s.triggers && !s.lua)) return { stop: false };
+  const vars = { ...(room.vars ?? {}) };
+  const host = hostFor(room, vars);
+  let stop = false;
+  let systemPrompt: TriggerRun["systemPrompt"];
+  if (s.lua) {
+    const { runLua } = await import("./risuLua");
+    for (const t of triggers) {
+      const lua = (t.effect ?? []).find((e) => e?.type === "triggerlua" && typeof e.code === "string");
+      if (!lua || t.effect?.[0]?.type !== "triggerlua") continue;
+      const isButton = mode === "manual" && !!arg.manualName;
+      const luaMode = isButton ? (arg.manualName!.startsWith("__btn:") ? "onButtonClick" : arg.manualName!) : mode;
+      const r = await runLua(lua.code!, luaMode, { ...host, lowLevelAccess: t.lowLevelAccess, get chat() { return host.chat; }, set chat(v) { host.chat = v; } }, isButton && luaMode === "onButtonClick" ? arg.manualName!.slice(6) : undefined);
+      if (r.error) console.warn("[Lua]", r.error);
+      stop ||= r.stop;
+    }
+  }
+  if (s.triggers) {
+    const blocks = triggers.filter((t) => t.effect?.[0]?.type !== "triggerlua" && t.effect?.[0]?.type !== "triggercode");
+    if (blocks.length) {
+      const { runTriggers } = await import("./risuTriggers");
+      try {
+        const r = await runTriggers(blocks as Parameters<typeof runTriggers>[0], mode, host, { manualName: arg.manualName });
+        stop ||= r.stop;
+        systemPrompt = r.systemPrompt;
+        if (r.reload) host.reload();
+      } catch (e) {
+        console.warn("[트리거]", e); // 봇 트리거 오류가 이야기를 막지 않게
+      }
+    }
+  }
+  const cur = state.rooms[roomId] ?? room;
+  const messages = applyChat(cur, host.chat);
+  const changedVars = JSON.stringify(vars) !== JSON.stringify(cur.vars ?? {});
+  const changedChat = messages.length !== cur.messages.length || messages.some((m, i) => m !== cur.messages[i]);
+  if (changedVars || changedChat) updateRoom(roomId, { ...(changedChat ? { messages } : {}), ...(changedVars ? { vars } : {}) });
+  return { stop, systemPrompt };
+}
+
+/** 화면 표시용 Lua editDisplay (메시지별 결과 캐시, 이야기·토글·다시 그리기 요청이 바뀌면 새로) */
+const luaDisplayCache = new WeakMap<object, { globals: object; tick: number; fns: Map<string, (t: string) => Promise<string>>; results: Map<string, Promise<string>> }>();
+export function displayLua(room: Room, msgId: string | null): ((t: string) => Promise<string>) | undefined {
+  if (!state.settings.risu.lua || !triggersOf(room).some((t) => t.effect?.[0]?.type === "triggerlua")) return undefined;
+  let c = luaDisplayCache.get(room);
+  if (!c || c.globals !== state.globals || c.tick !== state.risuTick) luaDisplayCache.set(room, (c = { globals: state.globals, tick: state.risuTick, fns: new Map(), results: new Map() }));
+  const key = msgId ?? "__live__";
+  let fn = c.fns.get(key);
+  if (!fn) {
+    const index = msgId === null ? splitRest(room) : chatIndexOf(room.messages, msgId);
+    const results = c.results;
+    fn = (t: string) => {
+      const k = `${index}|${t}`;
+      let p = results.get(k);
+      if (!p) results.set(k, (p = runLuaEdit(room, "editDisplay", t, { index }).then(String).catch(() => t)));
+      return p;
+    };
+    c.fns.set(key, fn);
+  }
+  return fn;
+}
+
+/** Lua 편집 리스너 (editInput · editOutput · editRequest · editDisplay) — 리스너가 없으면 값 그대로 */
+export async function runLuaEdit<T>(room: Room, type: "editInput" | "editOutput" | "editRequest" | "editDisplay", value: T, meta: object = {}): Promise<T> {
+  if (!state.settings.risu.lua) return value;
+  const codes = triggersOf(room).filter((t) => t.effect?.[0]?.type === "triggerlua").map((t) => t.effect!.find((e) => e.type === "triggerlua")!.code!).filter(Boolean);
+  if (!codes.length) return value;
+  const { runLua } = await import("./risuLua");
+  const vars = { ...(room.vars ?? {}) };
+  const host = hostFor(room, vars);
+  let v = value;
+  for (const code of codes) {
+    const r = await runLua(code, type, host, v, meta);
+    v = (r.res ?? v) as T;
+  }
+  if (type !== "editDisplay" && JSON.stringify(vars) !== JSON.stringify(room.vars ?? {})) updateRoom(room.id, { vars });
+  return v;
 }
 
 /** 전역 변수 (토글은 toggle_키) */
@@ -496,7 +657,7 @@ export function setRoomVar(roomId: string, key: string, value: string | null) {
 }
 
 /** 이야기·소설에서 쓸 수 있는 이미지와 봇의 정규식 스크립트 */
-export const poolFor = (target: Pick<Room, "worldId" | "personaId" | "characterIds">): ImagePool => imagePool(contextFor(target), state.images);
+export const poolFor = (target: Pick<Room, "worldId" | "personaId" | "characterIds">): ImagePool => imagePool(contextFor(target), state.images, state.settings.risu.scripts);
 /** v0.1 에서 보관만 해 둔 세계관·캐릭터를 라이브러리로 */
 export function importLegacyExtra(): number {
   const items = state.legacyExtra ? libraryFromExtra(state.legacyExtra) : [];
@@ -555,11 +716,14 @@ export function stopGeneration() {
 export async function send(roomId: string, text: string) {
   const r = state.rooms[roomId];
   if (!r || isGenerating()) return;
-  // 봇의 입력 스크립트(editinput)
-  const t = runScripts(text.trim(), poolFor(r).scripts, "editinput", cbsFor(r, { chatIndex: splitRest(r) })).text.trim();
+  // 봇의 입력 스크립트(editinput) + Lua editInput
+  const scripted = runScripts(text.trim(), poolFor(r).scripts, "editinput", state.settings.risu.cbs ? cbsFor(r, { chatIndex: splitRest(r) }) : undefined).text.trim();
+  const t = String(await runLuaEdit(r, "editInput", scripted)).trim();
   const msg: Message = { id: uid("m"), role: "user", text: t, createdAt: Date.now() };
   const title = r.messages.length === 0 && r.title === "새 이야기" && t ? t.slice(0, 24) + (t.length > 24 ? "…" : "") : r.title;
   updateRoom(roomId, { messages: t ? [...r.messages, msg] : r.messages, title });
+  // 봇 트리거: 입력 후
+  if (t && (await runRoomTrigger(roomId, "input")).stop) return;
   await runGeneration(roomId);
 }
 
@@ -577,16 +741,20 @@ export async function regenerate(roomId: string, note = "") {
 export function loreFor(room: Room, ctx: StoryContext): LoreHit[] {
   const groups = [...(ctx.world ? [{ source: ctx.world.name, entries: ctx.world.lore }] : []), ...ctx.characters.map((c) => ({ source: c.name, entries: c.lore }))];
   if (!groups.some((g) => g.entries.length)) return [];
-  const recent = room.messages.filter((m) => !m.error).slice(-4).map((m) => m.text).join("\n");
-  return matchLore(groups, recent);
+  const msgs = room.messages.filter((m) => !m.error);
+  const recent = msgs.slice(-4).map((m) => m.text);
+  return matchLore(groups, recent.join("\n"), 4000, { messages: recent, chatLength: msgs.length + (msgs[0]?.greeting ? 0 : 1) });
 }
 
 async function runGeneration(roomId: string, note = "") {
+  // 봇 트리거: 보내기 직전 (Lua onStart · 블록 트리거 'start')
+  const started = state.rooms[roomId] ? await runRoomTrigger(roomId, "start") : { stop: false };
+  if (started.stop) return;
   const room = state.rooms[roomId];
   const s = state.settings;
   if (!room) return;
   const ctx0 = contextFor(room);
-  const pool = imagePool(ctx0, state.images);
+  const pool = imagePool(ctx0, state.images, s.risu.scripts);
   // RisuAI CBS: 토글·변수에 따라 설정 글과 대화 기록을 정리 ({{setvar}} 등은 기록하지 않고 지움)
   const useCbs = s.risu.cbs;
   const ctx = useCbs ? processContext(ctx0, envFor(room, { rmVar: true })) : ctx0;
@@ -613,6 +781,23 @@ async function runGeneration(roomId: string, note = "") {
     const last = history[history.length - 1];
     history[history.length - 1] = { ...last, content: `${last.content}\n\n<작가 지시: 이번 응답에 반영할 것>\n${note.trim()}\n</작가 지시>` };
   }
+  // 봇 트리거의 시스템 프롬프트 추가 (위치: 맨 앞 / 대화 기록 끝 / 프롬프트 끝)
+  const sp = started.systemPrompt;
+  if (sp && (sp.historyend.trim() || sp.promptend.trim())) {
+    const last = history[history.length - 1];
+    history[history.length - 1] = { ...last, content: [last.content, sp.historyend.trim(), sp.promptend.trim()].filter(Boolean).join("\n\n") };
+  }
+  let system = [sp?.start.trim(), buildSystemPrompt(s, room, ctx, imagePromptSection(ctx, pool, "chat"))].filter(Boolean).join("\n\n");
+  // Lua editRequest: AI에게 보낼 요청 전체를 봇이 고칠 수 있게
+  {
+    const req = [{ role: "system", content: system }, ...history] as { role: string; content: string }[];
+    const edited = await runLuaEdit(room, "editRequest", req);
+    if (Array.isArray(edited) && edited !== req) {
+      system = edited.filter((m) => m.role === "system").map((m) => String(m.content ?? "")).join("\n\n");
+      const rest = edited.filter((m) => m.role !== "system").map((m) => ({ role: (m.role === "user" ? "user" : "assistant") as "user" | "assistant", content: String(m.content ?? "") }));
+      if (rest.length) history.splice(0, history.length, ...rest);
+    }
+  }
   controller = new AbortController();
   setState({ live: { roomId, text: "", thinking: "", status: "", startedAt: Date.now(), lore } });
   const live = (p: Partial<LiveState>) => setState((st) => (st.live ? { live: { ...st.live, ...p } } : {}));
@@ -622,7 +807,7 @@ async function runGeneration(roomId: string, note = "") {
     const res = await callAI(
       "chat",
       {
-        system: buildSystemPrompt(s, room, ctx, imagePromptSection(ctx, pool, "chat")),
+        system,
         messages: history,
         maxTokens: outputTokensFor(s),
         signal: controller.signal,
@@ -638,13 +823,15 @@ async function runGeneration(roomId: string, note = "") {
     // 봇의 출력 스크립트 + CBS({{setvar}} 등을 실제로 기록하고 글에서는 지움)
     const vars = { ...(state.rooms[roomId]?.vars ?? {}) };
     const outCbs = useCbs ? cbsFor(state.rooms[roomId] ?? room, { runVar: true, vars, chatIndex: splitRest(state.rooms[roomId] ?? room) }) : undefined;
-    const out = runScripts(res.text, pool.scripts, "editoutput", outCbs).text;
+    const out = String(await runLuaEdit(state.rooms[roomId] ?? room, "editOutput", runScripts(res.text, pool.scripts, "editoutput", outCbs).text));
     const { text, choices } = s.choices ? splitChoices(out) : { text: out.trim(), choices: [] };
     if (!text) throw new ProviderError("AI가 빈 응답을 보냈습니다. 다시 시도해 주세요.", 0, "server");
     const cur = state.rooms[roomId];
     const reply: Message = { id: uid("m"), role: "assistant", text, ...(choices.length ? { choices } : {}), ...(res.thinking ? { thinking: res.thinking } : {}), model: res.model, ...(res.cost ? { usage: res.cost } : {}), ...(res.usedFallback ? { fallback: true } : {}), createdAt: Date.now() };
     if (cur) updateRoom(roomId, { messages: [...cur.messages, reply], ...(useCbs ? { vars } : {}) });
     ok = true;
+    // 봇 트리거: 응답 후 (Lua onOutput · 블록 트리거 'output')
+    await runRoomTrigger(roomId, "output").catch((e) => console.warn("[트리거]", e));
   } catch (e) {
     const err = e as Error;
     if (err?.name !== "AbortError") {

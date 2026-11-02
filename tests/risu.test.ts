@@ -108,7 +108,7 @@ describe("RisuAI 가져오기", () => {
     expect(c).toMatchObject({ kind: "character", name: "서율", summary: "감찰관 · OC" });
     expect(c.profile).toBe("서율는 조합 감찰관이다. 주인공의 상관.\n\n성격: 냉정함\n\n기본 상황: 비 오는 항구\n\n### 날씨\n항상 비가 온다"); // 상시 로어는 프로필로
     expect(c.speech).toBe('서율: "규정은 규정입니다."');
-    expect(c.lore.map((e) => [e.title, e.content, e.enabled, !!e.always])).toEqual([["조합", "항구의 마법 조합", true, false], ["re", "정규식 로어", false, false]]);
+    expect(c.lore.map((e) => [e.title, e.content, e.enabled, !!e.always])).toEqual([["조합", "항구의 마법 조합", true, false], ["re", "정규식 로어", true, false]]);
     expect(r.greeting?.greetings).toEqual(["*서율가 서류를 내려놓는다.* 늦었군요, 주인공.", "서율: 또 만났네요."]);
     expect(r.skipped).toEqual([]); // system_prompt가 {{original}}뿐이면 바꾸는 것이 없음
     expect(r.images).toEqual([]);

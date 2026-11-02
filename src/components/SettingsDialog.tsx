@@ -174,6 +174,7 @@ function WritingTab() {
       <Field label="대사 비중"><Choice value={s.style.dialogue} onChange={(dialogue) => st({ dialogue })} options={[["more", "대화 많이"], ["balanced", "균형"], ["less", "서술 위주"]]} /></Field>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={s.choices} onChange={(e) => updateSettings({ choices: e.target.checked })} /> 응답 끝에 다음 행동 선택지 4개 제안</label>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={s.autoMemory} onChange={(e) => updateSettings({ autoMemory: e.target.checked })} /> 장기 기억 자동 정리 (오래된 대화를 요약해 기억에 반영)</label>
+      <RisuOptionsField />
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={s.streaming} onChange={(e) => updateSettings({ streaming: e.target.checked })} /> 실시간 스트리밍 (쓰는 동안 바로 보기)</label>
       <Field label={`창의성 (temperature) ${s.temperature.toFixed(2)}`} hint="최신 Claude 모델처럼 이 값을 받지 않는 모델에서는 자동으로 제외됩니다.">
         <input type="range" min={0} max={1} step={0.05} value={s.temperature} onChange={(e) => updateSettings({ temperature: Number(e.target.value) })} className="w-full accent-violet-600" />
@@ -396,4 +397,28 @@ function readWithProgress(f: File, onPct: (pct: number) => void): Promise<Uint8A
     onPct(0);
     r.readAsArrayBuffer(f);
   });
+}
+
+const RISU_OPTS: [keyof Settings["risu"], string, string][] = [
+  ["cbs", "CBS 문법 · 변수 · 토글", "{{getvar}} · {{#when}} 같은 봇 문법과 🎛 토글(언어 선택 등)"],
+  ["scripts", "정규식 스크립트", "봇이 정한 글 바꾸기 (그림·상태창 표시 등)"],
+  ["lua", "Lua 트리거 · 버튼", "봇의 Lua 코드 실행 (시작 화면 버튼, 상태창 카드, 요청 편집 등)"],
+  ["triggers", "블록 트리거", "봇의 조건·효과 트리거 (변수 바꾸기, 시스템 프롬프트 추가 등)"],
+  ["background", "배경 HTML · CSS", "봇이 정한 화면 꾸밈"],
+  ["markdown", "마크다운 표시", "*기울임* · **굵게** · ~~취소선~~"],
+];
+function RisuOptionsField() {
+  const r = useApp((x) => x.settings.risu);
+  return (
+    <div className="card space-y-2">
+      <div className="font-bold">🤖 RisuAI 봇 기능</div>
+      <p className="hint">가져온 RisuAI 봇(charx 등)의 기능입니다. 문제가 있으면 기능별로 끌 수 있습니다. 봇 스크립트는 이 브라우저 안에서만 실행되며 외부 요청은 할 수 없습니다.</p>
+      {RISU_OPTS.map(([k, label, hint]) => (
+        <label key={k} className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={r[k]} onChange={(e) => updateSettings({ risu: { ...r, [k]: e.target.checked } })} />
+          <span>{label} <span className="hint block">{hint}</span></span>
+        </label>
+      ))}
+    </div>
+  );
 }

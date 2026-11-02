@@ -138,7 +138,7 @@ describe("실제 RisuAI 봇 구조 (부르봉과 라이스샤워 charx 분석 �
   test("상태창 <style>: 이 메시지 범위로 한정, body·@import·외부 url·fixed 제거, @media 유지", () => {
     const css = `@import url('https://fonts.googleapis.com/x'); body { min-height:100vh; background:#707090 } .status-window, .bar:hover { background-color:#13a9b0; position: fixed; color: red } @media (max-width:600px){ .stat-item{ padding:2px } } @font-face{font-family:x;src:url(https://x)} .bg{background:url(https://evil/x.png)} @keyframes k{from{opacity:0}to{opacity:1}}`;
     const out = scopeCss(css, "rs1");
-    expect(out).not.toContain("@import");
+    expect(out).not.toContain("@import"); // 글꼴이 아닌 주소는 버림
     expect(out).not.toMatch(/rs1 body|min-height/);
     expect(out).toContain(".rs1 .status-window,.rs1 .bar:hover{");
     expect(out).toContain("background-color:#13a9b0");
@@ -163,7 +163,9 @@ describe("실제 RisuAI 봇 구조 (부르봉과 라이스샤워 charx 분석 �
 test("CSS: 주소 안의 ; { } 와 따옴표 때문에 규칙이 깨지지 않는다 (실제 봇의 @import 구글 폰트)", () => {
   const css = "@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap');\nbody { margin: 0 }\n.status-window { background-color: #13a9b0; content: \"a;b}c\" }\n.x{color:red}";
   const out = scopeCss(css, "rs1");
-  expect(out).toBe('.rs1 .status-window{ background-color: #13a9b0; content: "a;b}c" }.rs1 .x{color:red}');
+  // Google Fonts @import만 맨 앞에 남기고(글꼴), 나머지 규칙은 범위 한정
+  expect(out).toBe('@import url("https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap");.rs1 .status-window{ background-color: #13a9b0; content: "a;b}c" }.rs1 .x{color:red}');
+  expect(scopeCss("@import url('https://evil.example/x.css'); .a{color:red}", "s")).toBe(".s .a{color:red}");
 });
 
 test("꺼 둔 스크립트는 적용하지 않는다", () => {

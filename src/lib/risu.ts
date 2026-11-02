@@ -81,17 +81,25 @@ interface RawLore {
   always: boolean;
   enabled: boolean;
   regex: boolean;
+  secondKeys?: string[];
+  order?: number;
 }
 /** late: @@depth 0~2 데코레이터 — RisuAI에서 대화 맨 끝(응답 직전)에 넣는 항목 */
 type ImportedLore = LoreEntry & { late?: true };
 function toLore(r: RawLore, name: string): ImportedLore | null {
   const late = /^@@@?depth\s+[0-2]\b/m.test(r.content);
+  // 데코레이터 줄은 따로 보관 (자리·깊이 관련은 이 앱의 배치 방식과 달라 빼고, 활성화 규칙만)
+  const decorators = (r.content.match(/^@@@?[a-z_]+[^\n]*$/gim) ?? []).filter((d) => !/^@@@?(depth|reverse_depth|position|role|end|instruct_\w+|inject_\w+|is_user_icon|disable_ui_prompt)\b/i.test(d)).join("\n");
   const content = fillMacros(stripDecorators(r.content), name);
   if (!content) return null;
-  // 정규식 키는 이 앱에서 매칭할 수 없음 → 키 없이 꺼 둔 상태로 보관
-  const keys = r.regex ? [] : [...new Set(r.keys.map((k) => fillMacros(k, name)).filter(Boolean))];
-  const always = r.always || (!r.regex && !keys.length);
-  return { id: uid("l"), title: fillMacros(r.title, name) || keys[0] || "", keys, content, enabled: r.enabled && !(r.regex && !r.always), ...(always ? { always: true } : {}), ...(late ? { late: true as const } : {}) };
+  const keys = [...new Set(r.keys.map((k) => (r.regex ? k.trim() : fillMacros(k, name))).filter(Boolean))];
+  const secondKeys = (r.secondKeys ?? []).map((k) => fillMacros(k, name)).filter(Boolean);
+  const always = r.always || !keys.length;
+  return {
+    id: uid("l"), title: fillMacros(r.title, name) || (r.regex ? "" : keys[0]) || "", keys, content, enabled: r.enabled, ...(always ? { always: true } : {}),
+    ...(r.regex ? { regex: true } : {}), ...(secondKeys.length ? { secondKeys } : {}), ...(r.order ? { order: r.order } : {}), ...(decorators ? { decorators } : {}),
+    ...(late ? { late: true as const } : {}),
+  };
 }
 /**
  * 상시(항상 켜짐) 로어는 이 앱의 로어북 글자 예산에 걸리지 않도록 본문으로 옮긴다.
@@ -113,14 +121,14 @@ const splitKeys = (s: string) => s.split(",").map((k) => k.trim()).filter(Boolea
 const fromRisuLore = (list: unknown, name: string) =>
   arr(list)
     .filter((e) => e.mode !== "folder")
-    .map((e) => toLore({ title: str(e.comment), keys: splitKeys(str(e.key)), content: str(e.content), always: !!e.alwaysActive || e.mode === "constant", enabled: true, regex: !!e.useRegex }, name))
+    .map((e) => toLore({ title: str(e.comment), keys: splitKeys(str(e.key)), content: str(e.content), always: !!e.alwaysActive || e.mode === "constant", enabled: true, regex: !!e.useRegex, secondKeys: e.selective ? splitKeys(str(e.secondkey)) : [], order: Number(e.insertorder) || 0 }, name))
     .filter((x): x is ImportedLore => !!x);
 
 /** Character Card V2/V3 character_book 항목 */
 const fromCardLore = (list: unknown, name: string) =>
   arr(list)
     .filter((e) => e.extensions?.risu_folder !== true && e.mode !== "folder")
-    .map((e) => toLore({ title: str(e.comment) || str(e.name), keys: strs(e.keys).length ? strs(e.keys) : splitKeys(str(e.keys)), content: str(e.content), always: !!e.constant, enabled: e.enabled !== false, regex: !!e.use_regex }, name))
+    .map((e) => toLore({ title: str(e.comment) || str(e.name), keys: strs(e.keys).length ? strs(e.keys) : splitKeys(str(e.keys)), content: str(e.content), always: !!e.constant, enabled: e.enabled !== false, regex: !!e.use_regex, secondKeys: e.selective ? strs(e.secondary_keys) : [], order: Number(e.insertion_order) || 0 }, name))
     .filter((x): x is ImportedLore => !!x);
 
 /** SillyTavern world info 등 외부 로어북 (entries: 객체 또는 배열) */
@@ -421,11 +429,12 @@ export function greetingRoom(g: RisuGreeting, index = 0): Room {
 }
 
 /* ---------------- 내보내기 (RisuAI에서 가져올 수 있는 형식) ---------------- */
+const withDecorators = (e: LoreEntry) => (e.decorators?.trim() ? `${e.decorators.trim()}\n${e.content}` : e.content);
 function toCardLore(lore: LoreEntry[]) {
-  return lore.map((e, i) => ({ keys: e.keys, content: e.content, extensions: {}, enabled: e.enabled, insertion_order: i, constant: !!e.always, selective: false, secondary_keys: [], name: e.title, comment: e.title, use_regex: false }));
+  return lore.map((e, i) => ({ keys: e.keys, content: withDecorators(e), extensions: {}, enabled: e.enabled, insertion_order: e.order ?? i, constant: !!e.always, selective: !!e.secondKeys?.length, secondary_keys: e.secondKeys ?? [], name: e.title, comment: e.title, use_regex: !!e.regex }));
 }
 function toRisuLore(lore: LoreEntry[]) {
-  return lore.map((e, i) => ({ key: e.keys.join(", "), secondkey: "", insertorder: 100 - Math.min(i, 99), comment: e.title || e.keys[0] || "", content: e.content, mode: "normal", alwaysActive: !!e.always, selective: false }));
+  return lore.map((e, i) => ({ key: e.keys.join(", "), secondkey: (e.secondKeys ?? []).join(", "), insertorder: e.order ?? 100 - Math.min(i, 99), comment: e.title || e.keys[0] || "", content: withDecorators(e), mode: "normal", alwaysActive: !!e.always, selective: !!e.secondKeys?.length, ...(e.regex ? { useRegex: true } : {}) }));
 }
 
 /** 내보낼 이미지 (바이트 포함) */

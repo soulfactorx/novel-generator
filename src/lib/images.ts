@@ -17,14 +17,15 @@ export interface ImagePool {
 }
 const poolCache = new WeakMap<object, Map<string, ImagePool>>();
 /** 같은 이미지 목록·같은 인물(수정 시각 포함)이면 같은 객체를 돌려준다 (화면 다시 그리기 최소화) */
-export function imagePool(ctx: StoryContext, images: Record<string, ImageMeta> | ImageMeta[]): ImagePool {
+export function imagePool(ctx: StoryContext, images: Record<string, ImageMeta> | ImageMeta[], scripts = true): ImagePool {
   const owners = [...ctx.characters, ...(ctx.world ? [ctx.world] : [])];
-  const key = owners.map((o) => `${o.id}:${o.updatedAt}`).join(",");
+  const key = owners.map((o) => `${o.id}:${o.updatedAt}`).join(",") + (scripts ? "" : "|noscripts");
   let byKey = poolCache.get(images);
   if (!byKey) poolCache.set(images, (byKey = new Map()));
   const hit = byKey.get(key);
   if (hit) return hit;
-  const pool = buildPool(owners, Array.isArray(images) ? images : Object.values(images), ctx);
+  const built = buildPool(owners, Array.isArray(images) ? images : Object.values(images), ctx);
+  const pool = scripts ? built : { ...built, scripts: [] }; // 설정에서 정규식 스크립트를 끈 경우
   if (byKey.size > 50) byKey.clear();
   byKey.set(key, pool);
   return pool;
@@ -213,7 +214,10 @@ const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 /* ---------------- 안전한 HTML (스크립트·외부 주소 제거) ---------------- */
 const TAGS = new Set("div span p br b i u s strong em small big sub sup mark hr blockquote ul ol li h1 h2 h3 h4 h5 h6 table thead tbody tfoot tr td th caption img details summary font center pre code ruby rt rp q cite abbr del ins figure figcaption button section article header footer nav aside main label".split(" "));
 const DROP = new Set(["script", "iframe", "object", "embed", "link", "meta", "base", "form", "input", "textarea", "select", "svg", "math", "template", "audio", "video", "source", "noscript", "title"]);
-const safeUrl = (u: string) => /^(blob:|data:image\/(png|jpe?g|gif|webp|avif);)/i.test(u.trim());
+// 그림 주소: 이 앱이 만든 blob 주소, data 그림(svg 포함 — 그림으로 그릴 때는 스크립트가 실행되지 않음)
+const safeUrl = (u: string) => /^(blob:|data:image\/(png|jpe?g|gif|webp|avif|svg\+xml)[;,])/i.test(u.trim());
+/** 봇 CSS의 @import 중 글꼴(Google Fonts)만 허용 */
+const FONT_IMPORT = /^@import\s+url\(\s*['"]?(https:\/\/fonts\.googleapis\.com\/css2?\?[^'")\s]+)['"]?\s*\)\s*;?$/i;
 function safeStyle(css: string): string {
   if (/expression\s*\(|@import|javascript:|behavior\s*:/i.test(css)) return "";
   return css
@@ -231,6 +235,7 @@ function safeStyle(css: string): string {
  */
 export function scopeCss(css: string, scope: string): string {
   const src = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const imports: string[] = [];
   let i = 0;
   /** i부터 chars 중 하나가 처음 나오는 위치 (따옴표 문자열·괄호 안은 건너뜀). 없으면 -1 */
   const next = (chars: string, from = i): number => {
@@ -266,7 +271,11 @@ export function scopeCss(css: string, scope: string): string {
       }
       const head = src.slice(i, k).trim();
       i = k + 1;
-      if (src[k] === ";") continue; // @import · @charset 등 중괄호 없는 규칙은 버림
+      if (src[k] === ";") {
+        const font = FONT_IMPORT.exec(head + ";");
+        if (font) imports.push(`@import url("${font[1]}");`);
+        continue; // 그 밖의 @import · @charset 등 중괄호 없는 규칙은 버림
+      }
       if (/^@(media|supports|container|layer)\b/i.test(head)) {
         const inner = block();
         if (inner.trim()) out += `${head}{${inner}}`;
@@ -285,7 +294,8 @@ export function scopeCss(css: string, scope: string): string {
     }
     return out;
   };
-  return block();
+  const body = block();
+  return imports.join("") + body; // @import는 맨 앞이어야 함
 }
 
 export function sanitizeHtml(html: string, urls: Record<string, string>, scope?: string): string {
