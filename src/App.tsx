@@ -7,6 +7,7 @@ import ChatView from "./components/ChatView";
 import SettingsDialog from "./components/SettingsDialog";
 import LibraryDialog from "./components/LibraryDialog";
 import NewRoomDialog from "./components/NewRoomDialog";
+import RisuDialogView from "./components/RisuDialogView";
 import NovelView from "./components/NovelView";
 
 export default function App() {
@@ -52,6 +53,7 @@ export default function App() {
       {settingsTab && <SettingsDialog initialTab={settingsTab} onClose={() => setSettingsTab(null)} />}
       {newRoom && <NewRoomDialog onClose={() => setNewRoom(false)} onOpenLibrary={openLibrary} />}
       {library && <LibraryDialog onClose={() => setLibrary(false)} />}
+      <RisuDialogView />
     </div>
   );
 }

@@ -75,3 +75,44 @@ describe("E.No.S import → library", () => {
     expect(room0.memoryCursorAt).toBeDefined();
   });
 });
+
+describe("로어북 RisuAI 규칙", () => {
+  const L = (o: Partial<LoreEntry>): LoreEntry => ({ id: Math.random().toString(), title: "t", keys: [], content: "내용", enabled: true, ...o });
+  const titles = (h: ReturnType<typeof matchLore>) => h.map((x) => x.entry.title).sort();
+  test("공백 무시·대소문자 무시, 보조 키는 둘 다 나와야", () => {
+    const g = [{ source: "", entries: [L({ title: "a", keys: ["은빛 항구"] }), L({ title: "b", keys: ["항구"], secondKeys: ["조합"] }), L({ title: "c", keys: ["항구"], secondKeys: ["없음"] })] }];
+    expect(titles(matchLore(g, "은빛항구의 조합 사무실"))).toEqual(["a", "b"]);
+  });
+  test("정규식 키 /…/플래그", () => {
+    const g = [{ source: "", entries: [L({ title: "r", keys: ["/(검|칼)을 뽑/"], regex: true }), L({ title: "bad", keys: ["/[/"], regex: true })] }];
+    expect(titles(matchLore(g, "그가 칼을 뽑았다"))).toEqual(["r"]);
+  });
+  test("데코레이터: activate_only_after · activate_only_every · exclude_keys · additional_keys · activate · dont_activate · probability", () => {
+    const g = [{ source: "", entries: [
+      L({ title: "after", keys: ["x"], decorators: "@@activate_only_after 5" }),
+      L({ title: "every", keys: ["x"], decorators: "@@activate_only_every 2" }),
+      L({ title: "excl", keys: ["x"], decorators: "@@exclude_keys 금지" }),
+      L({ title: "add", keys: ["x"], decorators: "@@additional_keys 추가" }),
+      L({ title: "force", keys: ["없는키"], decorators: "@@activate" }),
+      L({ title: "never", keys: ["x"], decorators: "@@dont_activate" }),
+      L({ title: "lucky", keys: ["x"], decorators: "@@probability 30" }),
+    ] }];
+    expect(titles(matchLore(g, "x 금지", 4000, { chatLength: 4, random: () => 0.9 }))).toEqual(["every", "force"]);
+    expect(titles(matchLore(g, "x 추가", 4000, { chatLength: 5, random: () => 0.1 }))).toEqual(["add", "after", "excl", "force", "lucky"]);
+  });
+  test("재귀 검색: 활성화된 로어 내용으로 다른 로어가 켜짐, @@unrecursive · @@no_recursive_search", () => {
+    const g = [{ source: "", entries: [
+      L({ title: "a", keys: ["왕"], content: "왕의 검은 '서리'다" }),
+      L({ title: "b", keys: ["서리"], content: "서리는 마검" }),
+      L({ title: "c", keys: ["마검"], content: "마검 설명", decorators: "@@no_recursive_search" }),
+    ] }];
+    expect(titles(matchLore(g, "왕이 말했다"))).toEqual(["a", "b"]);
+    expect(titles(matchLore(g, "왕이 말했다", 4000, { recursive: false }))).toEqual(["a"]);
+  });
+  test("우선순위(order·@@priority) 높은 것이 예산 안에 먼저, 검색 깊이(@@scan_depth)", () => {
+    const g = [{ source: "", entries: [L({ title: "low", keys: ["x"], content: "가".repeat(3000), order: 1 }), L({ title: "high", keys: ["x"], content: "나".repeat(3000), order: 9 })] }];
+    expect(matchLore(g, "x").map((h) => h.entry.title)).toEqual(["high"]);
+    const d = [{ source: "", entries: [L({ title: "deep", keys: ["옛날"], decorators: "@@scan_depth 1" }), L({ title: "wide", keys: ["옛날"] })] }];
+    expect(titles(matchLore(d, "", 4000, { messages: ["옛날 이야기", "지금"] }))).toEqual(["wide"]);
+  });
+});

@@ -31,6 +31,17 @@ export default function LoreEditor({ entries, onChange }: { entries: LoreEntry[]
               <input className="input" placeholder="제목 (예: 은빛 항구 조합)" value={e.title} onChange={(x) => set(e.id, { title: x.target.value })} aria-label="로어 제목" />
               <KeysInput keys={e.keys} onChange={(keys) => set(e.id, { keys })} />
               <textarea className="input min-h-24" placeholder="내용 (짧고 사실 위주로)" value={e.content} onChange={(x) => set(e.id, { content: x.target.value })} aria-label="로어 내용" />
+              <details className="rounded border border-stone-200 px-2 py-1 text-sm dark:border-stone-800" open={!!(e.secondKeys?.length || e.regex || e.decorators || e.order)}>
+                <summary className="cursor-pointer text-xs font-semibold text-stone-500">고급 (RisuAI 규칙)</summary>
+                <div className="mt-2 space-y-2">
+                  <label className="block"><span className="label">보조 키 (주 키와 함께 이것도 나와야 전달, 쉼표로 구분)</span><input className="input" defaultValue={(e.secondKeys ?? []).join(", ")} onBlur={(x) => set(e.id, { secondKeys: parseKeys(x.target.value) })} aria-label="보조 키" /></label>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="flex items-center gap-1.5"><input type="checkbox" checked={!!e.regex} onChange={(x) => set(e.id, { regex: x.target.checked })} /> 키를 정규식으로 (/패턴/플래그)</label>
+                    <label className="flex items-center gap-1.5">우선순위 <input type="number" className="input w-20 py-1" value={e.order ?? 0} onChange={(x) => set(e.id, { order: Number(x.target.value) || 0 })} aria-label="우선순위" /></label>
+                  </div>
+                  <label className="block"><span className="label">데코레이터 (한 줄에 하나: @@activate_only_after 3 · @@probability 50 · @@exclude_keys 키 · @@additional_keys 키 · @@activate · @@dont_activate · @@scan_depth 2 · @@unrecursive)</span><textarea className="input min-h-14 font-mono text-xs" value={e.decorators ?? ""} onChange={(x) => set(e.id, { decorators: x.target.value })} aria-label="데코레이터" /></label>
+                </div>
+              </details>
               <div className="flex flex-wrap items-center gap-3 text-sm">
                 <label className="flex items-center gap-1.5"><input type="checkbox" checked={e.enabled} onChange={(x) => set(e.id, { enabled: x.target.checked })} /> 사용</label>
                 <label className="flex items-center gap-1.5"><input type="checkbox" checked={!!e.always} onChange={(x) => set(e.id, { always: x.target.checked })} /> 키워드와 상관없이 항상 전달</label>

@@ -19,7 +19,7 @@ export default function Sidebar({ open, onClose, onOpenSettings, onNewStory, onO
       {open && <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={onClose} />}
       <aside className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-stone-200 bg-stone-100 transition-transform md:static md:translate-x-0 dark:border-stone-800 dark:bg-stone-900 ${open ? "translate-x-0" : "-translate-x-full"}`}>
         <div className="flex items-center justify-between px-4 py-3">
-          <span className="font-extrabold tracking-tight">✒️ Novel Generator</span>
+          <span className="font-extrabold tracking-tight">✒️ Novel Generator <span className="align-middle text-[10px] font-semibold text-stone-400" title="앱 버전 (웹페이지가 업데이트됐는지 확인할 때)">v{__APP_VERSION__}</span></span>
           <button className="btn-ghost px-2 md:hidden" onClick={onClose} aria-label="메뉴 닫기">✕</button>
         </div>
         <div className="mx-3 mb-2 grid grid-cols-2 gap-1 rounded-lg bg-stone-200/70 p-1 dark:bg-stone-800">

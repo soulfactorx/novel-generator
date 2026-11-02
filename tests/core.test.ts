@@ -27,6 +27,12 @@ describe("choices", () => {
     expect(r.text).toBe("본문 첫 문단.\n\n둘째 문단.");
     expect(r.choices).toEqual(["다가간다", "물러선다", "묻는다", "웃는다"]);
     expect(splitChoices("선택지 없음").choices).toEqual([]);
+    // 봇이 응답 맨 끝에 쓰라고 한 상태창이 선택지 뒤에 와도 선택지로 먹지 않고 본문으로
+    const status = "[체력:100% |시간:10:35 AM|날짜:04-08]";
+    const r2 = splitChoices(`본문.\n\n[선택지]\n1. 인사한다\n\n2. 떠난다\n\n${status}`);
+    expect(r2.choices).toEqual(["인사한다", "떠난다"]);
+    expect(r2.text).toBe(`본문.\n\n${status}`);
+    expect(previewText(`본문.\n\n[선택지]\n1. 인사한다\n\n${status}`)).toBe(`본문.\n\n${status}`);
     expect(previewText("본문입니다\n\n[선택지]\n1. a")).toBe("본문입니다");
     expect(previewText("본문입니다\n\n[선택")).toBe("본문입니다");
   });

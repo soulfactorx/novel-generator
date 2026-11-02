@@ -17,14 +17,15 @@ export interface ImagePool {
 }
 const poolCache = new WeakMap<object, Map<string, ImagePool>>();
 /** 같은 이미지 목록·같은 인물(수정 시각 포함)이면 같은 객체를 돌려준다 (화면 다시 그리기 최소화) */
-export function imagePool(ctx: StoryContext, images: Record<string, ImageMeta> | ImageMeta[]): ImagePool {
+export function imagePool(ctx: StoryContext, images: Record<string, ImageMeta> | ImageMeta[], scripts = true): ImagePool {
   const owners = [...ctx.characters, ...(ctx.world ? [ctx.world] : [])];
-  const key = owners.map((o) => `${o.id}:${o.updatedAt}`).join(",");
+  const key = owners.map((o) => `${o.id}:${o.updatedAt}`).join(",") + (scripts ? "" : "|noscripts");
   let byKey = poolCache.get(images);
   if (!byKey) poolCache.set(images, (byKey = new Map()));
   const hit = byKey.get(key);
   if (hit) return hit;
-  const pool = buildPool(owners, Array.isArray(images) ? images : Object.values(images), ctx);
+  const built = buildPool(owners, Array.isArray(images) ? images : Object.values(images), ctx);
+  const pool = scripts ? built : { ...built, scripts: [] }; // 설정에서 정규식 스크립트를 끈 경우
   if (byKey.size > 50) byKey.clear();
   byKey.set(key, pool);
   return pool;
@@ -109,8 +110,9 @@ export function findAsset(name: string, list: ImageMeta[], fuzzy = true): ImageM
 /* ---------------- 정규식 스크립트 ---------------- */
 export type ScriptMode = "editinput" | "editoutput" | "editprocess" | "editdisplay";
 /** 반환: 바뀐 글, @@emo 로 고른 감정 이미지 이름 */
-export function runScripts(text: string, scripts: RegexScript[], mode: ScriptMode): { text: string; emotion?: string } {
-  let data = text;
+export function runScripts(text: string, scripts: RegexScript[], mode: ScriptMode, cbs?: (s: string) => string): { text: string; emotion?: string } {
+  // RisuAI처럼: 먼저 CBS, 그리고 스크립트를 적용할 때마다 다시 CBS
+  let data = cbs ? cbs(text) : text;
   let emotion: string | undefined;
   const parsed = scripts
     .filter((s) => s && s.type === mode && s.in && !s.disabled)
@@ -135,7 +137,7 @@ export function runScripts(text: string, scripts: RegexScript[], mode: ScriptMod
     flag = [...new Set(flag.trim().replace(/[^dgimsuvy]/g, ""))].join("") || "u";
     let re: RegExp;
     try {
-      re = new RegExp(s.in, flag);
+      re = new RegExp(actions.includes("cbs") && cbs ? cbs(s.in) : s.in, flag);
     } catch {
       continue; // 이 브라우저에서 못 쓰는 정규식은 건너뜀
     }
@@ -153,8 +155,8 @@ export function runScripts(text: string, scripts: RegexScript[], mode: ScriptMod
             data = top ? `${moved}\n${data}` : `${data}\n${moved}`;
           }
         } else if (out.startsWith("@@inject") || out.startsWith("@@repeat_back") || actions.includes("inject") || actions.includes("repeat_back")) continue; // 채팅 기록을 고치는 동작은 지원하지 않음
-        else data = data.replace(re, out);
-      } else data = data.replace(re, out);
+        else data = cbs ? cbs(data.replace(re, out)) : data.replace(re, out);
+      } else data = cbs ? cbs(data.replace(re, out)) : data.replace(re, out);
     } catch {
       /* 잘못된 치환식 무시 */
     }
@@ -174,9 +176,9 @@ export const hasMarkup = (s: string) => /<[a-z!/]/i.test(s) || /nvimg:[a-z0-9]/i
  * 표시용 변환: editdisplay 스크립트 → <Emotion> → 에셋 표시를 <img src="nvimg:ID"> 로.
  * 반환 html은 아직 안전 처리 전이며 그림 주소는 토큰 상태.
  */
-export function renderRisu(text: string, pool: ImagePool): { html: string; ids: string[]; emotion?: string } {
+export function renderRisu(text: string, pool: ImagePool, cbs?: (s: string) => string): { html: string; ids: string[]; emotion?: string } {
   const ids = new Set<string>();
-  const r = runScripts(text, pool.scripts, "editdisplay");
+  const r = runScripts(text, pool.scripts, "editdisplay", cbs);
   let html = r.text.replace(EMOTION_TAG, (_, n: string) => `{{emotion::${n}}}`);
   if (r.emotion) html = `{{emotion::${r.emotion}}}\n${html}`;
   html = html.replace(ASSET_TAG, (_, type: string, name: string) => {
@@ -210,9 +212,12 @@ export function renderRisu(text: string, pool: ImagePool): { html: string; ids: 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /* ---------------- 안전한 HTML (스크립트·외부 주소 제거) ---------------- */
-const TAGS = new Set("div span p br b i u s strong em small big sub sup mark hr blockquote ul ol li h1 h2 h3 h4 h5 h6 table thead tbody tfoot tr td th caption img details summary font center pre code ruby rt rp q cite abbr del ins figure figcaption".split(" "));
-const DROP = new Set(["script", "iframe", "object", "embed", "link", "meta", "base", "form", "input", "button", "textarea", "select", "svg", "math", "template", "audio", "video", "source", "noscript", "title"]);
-const safeUrl = (u: string) => /^(blob:|data:image\/(png|jpe?g|gif|webp|avif);)/i.test(u.trim());
+const TAGS = new Set("div span p br b i u s strong em small big sub sup mark hr blockquote ul ol li h1 h2 h3 h4 h5 h6 table thead tbody tfoot tr td th caption img details summary font center pre code ruby rt rp q cite abbr del ins figure figcaption button section article header footer nav aside main label".split(" "));
+const DROP = new Set(["script", "iframe", "object", "embed", "link", "meta", "base", "form", "input", "textarea", "select", "svg", "math", "template", "audio", "video", "source", "noscript", "title"]);
+// 그림 주소: 이 앱이 만든 blob 주소, data 그림(svg 포함 — 그림으로 그릴 때는 스크립트가 실행되지 않음)
+const safeUrl = (u: string) => /^(blob:|data:image\/(png|jpe?g|gif|webp|avif|svg\+xml)[;,])/i.test(u.trim());
+/** 봇 CSS의 @import 중 글꼴(Google Fonts)만 허용 */
+const FONT_IMPORT = /^@import\s+url\(\s*['"]?(https:\/\/fonts\.googleapis\.com\/css2?\?[^'")\s]+)['"]?\s*\)\s*;?$/i;
 function safeStyle(css: string): string {
   if (/expression\s*\(|@import|javascript:|behavior\s*:/i.test(css)) return "";
   return css
@@ -230,6 +235,7 @@ function safeStyle(css: string): string {
  */
 export function scopeCss(css: string, scope: string): string {
   const src = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const imports: string[] = [];
   let i = 0;
   /** i부터 chars 중 하나가 처음 나오는 위치 (따옴표 문자열·괄호 안은 건너뜀). 없으면 -1 */
   const next = (chars: string, from = i): number => {
@@ -265,7 +271,11 @@ export function scopeCss(css: string, scope: string): string {
       }
       const head = src.slice(i, k).trim();
       i = k + 1;
-      if (src[k] === ";") continue; // @import · @charset 등 중괄호 없는 규칙은 버림
+      if (src[k] === ";") {
+        const font = FONT_IMPORT.exec(head + ";");
+        if (font) imports.push(`@import url("${font[1]}");`);
+        continue; // 그 밖의 @import · @charset 등 중괄호 없는 규칙은 버림
+      }
       if (/^@(media|supports|container|layer)\b/i.test(head)) {
         const inner = block();
         if (inner.trim()) out += `${head}{${inner}}`;
@@ -284,7 +294,8 @@ export function scopeCss(css: string, scope: string): string {
     }
     return out;
   };
-  return block();
+  const body = block();
+  return imports.join("") + body; // @import는 맨 앞이어야 함
 }
 
 export function sanitizeHtml(html: string, urls: Record<string, string>, scope?: string): string {
@@ -318,7 +329,7 @@ export function sanitizeHtml(html: string, urls: Record<string, string>, scope?:
       }
       for (const a of [...el.attributes]) {
         const n = a.name.toLowerCase();
-        const keep = n === "style" ? safeStyle(a.value) : tag === "img" && n === "src" ? (safeUrl(a.value) ? a.value : "") : ["alt", "title", "colspan", "rowspan", "open", "align", "color", "size", "width", "height", "class"].includes(n) ? a.value : "";
+        const keep = n === "style" ? safeStyle(a.value) : tag === "img" && n === "src" ? (safeUrl(a.value) ? a.value : "") : ["alt", "title", "colspan", "rowspan", "open", "align", "color", "size", "width", "height", "class", "role", "aria-label", "risu-trigger", "risu-btn", "risu-id", "type"].includes(n) ? a.value : "";
         if (keep) el.setAttribute(n, keep);
         else el.removeAttribute(a.name);
       }

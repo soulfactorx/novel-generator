@@ -174,6 +174,7 @@ function WritingTab() {
       <Field label="대사 비중"><Choice value={s.style.dialogue} onChange={(dialogue) => st({ dialogue })} options={[["more", "대화 많이"], ["balanced", "균형"], ["less", "서술 위주"]]} /></Field>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={s.choices} onChange={(e) => updateSettings({ choices: e.target.checked })} /> 응답 끝에 다음 행동 선택지 4개 제안</label>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={s.autoMemory} onChange={(e) => updateSettings({ autoMemory: e.target.checked })} /> 장기 기억 자동 정리 (오래된 대화를 요약해 기억에 반영)</label>
+      <RisuOptionsField />
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={s.streaming} onChange={(e) => updateSettings({ streaming: e.target.checked })} /> 실시간 스트리밍 (쓰는 동안 바로 보기)</label>
       <Field label={`창의성 (temperature) ${s.temperature.toFixed(2)}`} hint="최신 Claude 모델처럼 이 값을 받지 않는 모델에서는 자동으로 제외됩니다.">
         <input type="range" min={0} max={1} step={0.05} value={s.temperature} onChange={(e) => updateSettings({ temperature: Number(e.target.value) })} className="w-full accent-violet-600" />
@@ -229,12 +230,14 @@ function DataTab() {
   const [risu, setRisu] = useState<RisuImport | null>(null);
   const [greet, setGreet] = useState(-1); // -1: 이야기 만들지 않고 라이브러리에만 (인사말은 패키지에 보관)
   const [replace, setReplace] = useState(true); // 이미 가져온 같은 패키지가 있으면 교체
+  const [progress, setProgress] = useState<{ label: string; pct: number | null } | null>(null);
   const onFile = async (f: File) => {
     setMsg(null);
     setPending(null);
     setRisu(null);
     try {
-      const bytes = new Uint8Array(await f.arrayBuffer());
+      const bytes = await readWithProgress(f, (pct) => setProgress({ label: `파일 읽는 중 (${(f.size / 1048576).toFixed(1)}MB)`, pct }));
+      setProgress({ label: "내용 분석 중", pct: null });
       let j: unknown;
       if (!/\.(charx|risum|png|jpe?g)$/i.test(f.name)) {
         try {
@@ -267,6 +270,8 @@ function DataTab() {
       } else setPending(parseLegacyBackup(j));
     } catch (e) {
       setMsg({ ok: false, text: `❌ ${(e as Error).message}` });
+    } finally {
+      setProgress(null);
     }
   };
   return (
@@ -297,8 +302,10 @@ function DataTab() {
         {risu && <RisuPreview data={risu} greet={greet} setGreet={setGreet} replace={replace} setReplace={setReplace} onCancel={() => setRisu(null)} onImport={async () => {
           const data = risu;
           setRisu(null);
-          setMsg({ ok: true, text: data.images.length ? `⏳ 이미지 ${data.images.length}장을 저장하는 중…` : "⏳ 가져오는 중…" });
-          const res = await importRisu(data, { ...(greet >= 0 && data.greeting ? { greeting: greet } : {}), replace });
+          setMsg(null);
+          setProgress({ label: data.images.length ? `이미지 0 / ${data.images.length}장 저장 중` : "가져오는 중", pct: data.images.length ? 0 : null });
+          const res = await importRisu(data, { ...(greet >= 0 && data.greeting ? { greeting: greet } : {}), replace, onProgress: (d, t) => setProgress({ label: `이미지 ${d} / ${t}장 저장 중`, pct: Math.round((d / t) * 100) }) });
+          setProgress(null);
           const c = data.library.filter((e) => e.kind === "character").length, w = data.library.filter((e) => e.kind === "world").length;
           const made = data.rooms.length + (greet >= 0 && data.greeting ? 1 : 0);
           setMsg({ ok: true, text: `✅ ${[c && `등장인물 ${c}명`, w && `세계관 ${w}개`, res.images && `이미지 ${res.images}장`, made && `이야기 ${made}개`].filter(Boolean).join(", ")}을(를) ${res.replaced ? "교체했습니다(기존 패키지 업데이트)" : "가져왔습니다"}.${data.library.some((e) => e.kind !== "persona") ? " [📚 라이브러리]에서 언제든 고치고 다시 시작할 수 있습니다." : ""}` });
@@ -309,10 +316,18 @@ function DataTab() {
             <button className="btn-primary" onClick={() => setMsg({ ok: true, text: `✅ 라이브러리에 ${importLegacyExtra()}개 항목을 추가했습니다.` })}>라이브러리로 가져오기</button>
           </div>
         )}
+        {progress && (
+          <div className="space-y-1" role="progressbar" aria-valuenow={progress.pct ?? undefined} aria-label="가져오기 진행률">
+            <div className="flex justify-between text-xs text-stone-500"><span>⏳ {progress.label}</span>{progress.pct !== null && <b>{progress.pct}%</b>}</div>
+            <div className="h-2 overflow-hidden rounded-full bg-stone-200 dark:bg-stone-800">
+              <div className={`h-full rounded-full bg-violet-600 transition-all ${progress.pct === null ? "w-1/3 animate-pulse" : ""}`} style={progress.pct !== null ? { width: `${progress.pct}%` } : undefined} />
+            </div>
+          </div>
+        )}
         {msg && <p className={`text-sm font-semibold ${msg.ok ? "text-emerald-600" : "text-rose-600"}`}>{msg.text}</p>}
       </div>
       <p className="hint text-center">
-        Novel Generator · <a className="underline" href="https://github.com/soulfactorx/novel-generator" target="_blank" rel="noreferrer">소스 코드</a> · <a className="underline" href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noreferrer">AGPL-3.0</a>
+        Novel Generator v{__APP_VERSION__} · <a className="underline" href="https://github.com/soulfactorx/novel-generator" target="_blank" rel="noreferrer">소스 코드</a> · <a className="underline" href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noreferrer">AGPL-3.0</a>
       </p>
     </div>
   );
@@ -367,6 +382,43 @@ function RisuPreview({ data, greet, setGreet, replace, setReplace, onImport, onC
         <button className="btn-primary" onClick={onImport}>가져오기</button>
         <button className="btn-ghost" onClick={onCancel}>취소</button>
       </div>
+    </div>
+  );
+}
+
+/** 파일을 읽으며 진행률(0~100)을 알려 준다 */
+function readWithProgress(f: File, onPct: (pct: number) => void): Promise<Uint8Array> {
+  if (typeof FileReader === "undefined" || f.size < 2_000_000) return f.arrayBuffer().then((b) => new Uint8Array(b));
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onprogress = (e) => e.lengthComputable && onPct(Math.round((e.loaded / e.total) * 100));
+    r.onload = () => res(new Uint8Array(r.result as ArrayBuffer));
+    r.onerror = () => rej(r.error ?? new Error("파일을 읽지 못했습니다."));
+    onPct(0);
+    r.readAsArrayBuffer(f);
+  });
+}
+
+const RISU_OPTS: [keyof Settings["risu"], string, string][] = [
+  ["cbs", "CBS 문법 · 변수 · 토글", "{{getvar}} · {{#when}} 같은 봇 문법과 🎛 토글(언어 선택 등)"],
+  ["scripts", "정규식 스크립트", "봇이 정한 글 바꾸기 (그림·상태창 표시 등)"],
+  ["lua", "Lua 트리거 · 버튼", "봇의 Lua 코드 실행 (시작 화면 버튼, 상태창 카드, 요청 편집 등)"],
+  ["triggers", "블록 트리거", "봇의 조건·효과 트리거 (변수 바꾸기, 시스템 프롬프트 추가 등)"],
+  ["background", "배경 HTML · CSS", "봇이 정한 화면 꾸밈"],
+  ["markdown", "마크다운 표시", "*기울임* · **굵게** · ~~취소선~~"],
+];
+function RisuOptionsField() {
+  const r = useApp((x) => x.settings.risu);
+  return (
+    <div className="card space-y-2">
+      <div className="font-bold">🤖 RisuAI 봇 기능</div>
+      <p className="hint">가져온 RisuAI 봇(charx 등)의 기능입니다. 문제가 있으면 기능별로 끌 수 있습니다. 봇 스크립트는 이 브라우저 안에서만 실행되며 외부 요청은 할 수 없습니다.</p>
+      {RISU_OPTS.map(([k, label, hint]) => (
+        <label key={k} className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={r[k]} onChange={(e) => updateSettings({ risu: { ...r, [k]: e.target.checked } })} />
+          <span>{label} <span className="hint block">{hint}</span></span>
+        </label>
+      ))}
     </div>
   );
 }

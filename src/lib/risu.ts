@@ -12,7 +12,7 @@
 import { zip } from "./exporters";
 import { uid } from "./id";
 import { fillAssetLists } from "./images";
-import type { Character, Entity, ImageMeta, LoreEntry, Message, RegexScript, Room, World } from "./types";
+import type { Character, Entity, ImageMeta, LoreEntry, Message, RegexScript, RisuExtras, Room, World } from "./types";
 import { findZip, listZip } from "./unzip";
 
 type Any = Record<string, any>;
@@ -81,17 +81,25 @@ interface RawLore {
   always: boolean;
   enabled: boolean;
   regex: boolean;
+  secondKeys?: string[];
+  order?: number;
 }
 /** late: @@depth 0~2 데코레이터 — RisuAI에서 대화 맨 끝(응답 직전)에 넣는 항목 */
 type ImportedLore = LoreEntry & { late?: true };
 function toLore(r: RawLore, name: string): ImportedLore | null {
   const late = /^@@@?depth\s+[0-2]\b/m.test(r.content);
+  // 데코레이터 줄은 따로 보관 (자리·깊이 관련은 이 앱의 배치 방식과 달라 빼고, 활성화 규칙만)
+  const decorators = (r.content.match(/^@@@?[a-z_]+[^\n]*$/gim) ?? []).filter((d) => !/^@@@?(depth|reverse_depth|position|role|end|instruct_\w+|inject_\w+|is_user_icon|disable_ui_prompt)\b/i.test(d)).join("\n");
   const content = fillMacros(stripDecorators(r.content), name);
   if (!content) return null;
-  // 정규식 키는 이 앱에서 매칭할 수 없음 → 키 없이 꺼 둔 상태로 보관
-  const keys = r.regex ? [] : [...new Set(r.keys.map((k) => fillMacros(k, name)).filter(Boolean))];
-  const always = r.always || (!r.regex && !keys.length);
-  return { id: uid("l"), title: fillMacros(r.title, name) || keys[0] || "", keys, content, enabled: r.enabled && !(r.regex && !r.always), ...(always ? { always: true } : {}), ...(late ? { late: true as const } : {}) };
+  const keys = [...new Set(r.keys.map((k) => (r.regex ? k.trim() : fillMacros(k, name))).filter(Boolean))];
+  const secondKeys = (r.secondKeys ?? []).map((k) => fillMacros(k, name)).filter(Boolean);
+  const always = r.always || !keys.length;
+  return {
+    id: uid("l"), title: fillMacros(r.title, name) || (r.regex ? "" : keys[0]) || "", keys, content, enabled: r.enabled, ...(always ? { always: true } : {}),
+    ...(r.regex ? { regex: true } : {}), ...(secondKeys.length ? { secondKeys } : {}), ...(r.order ? { order: r.order } : {}), ...(decorators ? { decorators } : {}),
+    ...(late ? { late: true as const } : {}),
+  };
 }
 /**
  * 상시(항상 켜짐) 로어는 이 앱의 로어북 글자 예산에 걸리지 않도록 본문으로 옮긴다.
@@ -113,14 +121,14 @@ const splitKeys = (s: string) => s.split(",").map((k) => k.trim()).filter(Boolea
 const fromRisuLore = (list: unknown, name: string) =>
   arr(list)
     .filter((e) => e.mode !== "folder")
-    .map((e) => toLore({ title: str(e.comment), keys: splitKeys(str(e.key)), content: str(e.content), always: !!e.alwaysActive || e.mode === "constant", enabled: true, regex: !!e.useRegex }, name))
+    .map((e) => toLore({ title: str(e.comment), keys: splitKeys(str(e.key)), content: str(e.content), always: !!e.alwaysActive || e.mode === "constant", enabled: true, regex: !!e.useRegex, secondKeys: e.selective ? splitKeys(str(e.secondkey)) : [], order: Number(e.insertorder) || 0 }, name))
     .filter((x): x is ImportedLore => !!x);
 
 /** Character Card V2/V3 character_book 항목 */
 const fromCardLore = (list: unknown, name: string) =>
   arr(list)
     .filter((e) => e.extensions?.risu_folder !== true && e.mode !== "folder")
-    .map((e) => toLore({ title: str(e.comment) || str(e.name), keys: strs(e.keys).length ? strs(e.keys) : splitKeys(str(e.keys)), content: str(e.content), always: !!e.constant, enabled: e.enabled !== false, regex: !!e.use_regex }, name))
+    .map((e) => toLore({ title: str(e.comment) || str(e.name), keys: strs(e.keys).length ? strs(e.keys) : splitKeys(str(e.keys)), content: str(e.content), always: !!e.constant, enabled: e.enabled !== false, regex: !!e.use_regex, secondKeys: e.selective ? strs(e.secondary_keys) : [], order: Number(e.insertion_order) || 0 }, name))
     .filter((x): x is ImportedLore => !!x);
 
 /** SillyTavern world info 등 외부 로어북 (entries: 객체 또는 배열) */
@@ -182,12 +190,23 @@ function toScripts(list: unknown): RegexScript[] {
 
 function skippedOf(m: Any, other = 0): string[] {
   const out: string[] = [];
-  const n = (v: unknown) => (Array.isArray(v) ? v.length : 0);
-  if (n(m.trigger) || n(m.triggerscript)) out.push(`트리거 스크립트 ${n(m.trigger) + n(m.triggerscript)}개`);
-  if (str(m.cjs).trim()) out.push("모듈 스크립트");
-  if (str(m.backgroundEmbedding).trim() || str(m.backgroundHTML).trim()) out.push("배경 HTML");
+  if (str(m.cjs).trim()) out.push("모듈 JS 스크립트");
   if (other) out.push(`그림이 아닌 에셋(음악·영상 등) ${other}개`);
   return out;
+}
+/** RisuAI 실행 요소: 카드 확장(risuai) + 모듈(module.risum) */
+function risuExtrasOf(risu: Any, mod?: Any): RisuExtras | undefined {
+  const triggers = [...(Array.isArray(risu.triggerscript) ? risu.triggerscript : []), ...(Array.isArray(mod?.trigger) ? mod!.trigger : [])].filter((t: Any) => t && typeof t === "object" && (Array.isArray(t.effect) ? t.effect.length : 0) > 0);
+  const toggles = [str(risu.toggles), typeof mod?.customModuleToggle === "string" ? mod.customModuleToggle : ""].filter((x) => x.trim()).join("\n");
+  const bg = [str(risu.backgroundHTML), str(mod?.backgroundEmbedding)].filter((x) => x.trim()).join("\n");
+  const x: RisuExtras = {
+    ...(toggles ? { toggles } : {}),
+    ...(str(risu.defaultVariables).trim() ? { defaultVariables: str(risu.defaultVariables) } : {}),
+    ...(triggers.length ? { triggers } : {}),
+    ...(bg ? { backgroundHTML: bg } : {}),
+    ...(risu.lowLevelAccess || mod?.lowLevelAccess ? { lowLevelAccess: true } : {}),
+  };
+  return Object.keys(x).length ? x : undefined;
 }
 
 function moduleToWorld(m: Any, source: string, assetData: Uint8Array[] = []): RisuImport {
@@ -208,7 +227,7 @@ function moduleToWorld(m: Any, source: string, assetData: Uint8Array[] = []): Ri
   const lore = parts.lore.map((l) => ({ ...l, content: fillAssetLists(l.content, names, []) }));
   const scripts = toScripts(m.regex);
   // 모듈 설명은 RisuAI에서 화면 표시용이라, 상시 로어가 있으면 그것을 세계관 설명으로 쓴다
-  const world: World = { kind: "world", id, name, description: fillAssetLists(parts.body, names, []) || fix(str(m.description)), rules: fillAssetLists(parts.late, names, []), lore, ...(scripts.length ? { scripts } : {}), createdAt: now, updatedAt: now };
+  const world: World = { kind: "world", id, name, description: fillAssetLists(parts.body, names, []) || fix(str(m.description)), rules: fillAssetLists(parts.late, names, []), lore, ...(scripts.length ? { scripts } : {}), ...(risuExtrasOf({}, m) ? { risu: risuExtrasOf({}, m) } : {}), createdAt: now, updatedAt: now };
   return { source, library: [world], rooms: [], images, skipped: skippedOf(m, other) };
 }
 
@@ -268,8 +287,13 @@ function cardToCharacter(cardIn: Any, source: string, moduleLore?: { module: Any
     ...(instructions ? { instructions: fix(instructions) } : {}),
     lore: lore.map((l) => ({ ...l, content: fix(l.content) })),
     ...(scripts.length ? { scripts } : {}),
+    ...(risuExtrasOf(risu, moduleLore?.module) ? { risu: risuExtrasOf(risu, moduleLore?.module) } : {}),
     ...(risu.viewScreen === "emotion" && emoNames.length ? { emotionMode: true } : {}),
     ...(greetings.length ? { greetings } : {}), // 인사말은 등장인물에 보관 → 언제든 다른 인사말로 새 이야기
+    ...(str(card.creator_notes).trim() ? { notes: str(card.creator_notes).trim() } : {}),
+    ...(card.creator_notes_multilingual && typeof card.creator_notes_multilingual === "object" && Object.keys(card.creator_notes_multilingual).length
+      ? { notesByLang: Object.fromEntries(Object.entries(card.creator_notes_multilingual as Record<string, unknown>).map(([k, v]) => [k, str(v)]).filter(([, v]) => v.trim())) }
+      : {}),
     createdAt: now, updatedAt: now,
   };
   const skipped = skippedOf({ ...risu, ...(moduleLore?.module || {}) }, other);
@@ -401,15 +425,16 @@ async function parseRisuBytes(name: string, b: Uint8Array): Promise<RisuImport> 
 export function greetingRoom(g: RisuGreeting, index = 0): Room {
   const now = Date.now();
   const text = g.greetings[index] ?? g.greetings[0] ?? "";
-  return { id: uid("r"), title: `${g.name}와(과)의 이야기`, premise: "", memory: "", messages: text ? [{ id: uid("m"), role: "assistant", text, createdAt: now }] : [], createdAt: now, updatedAt: now, characterIds: [g.characterId] };
+  return { id: uid("r"), title: `${g.name}와(과)의 이야기`, premise: "", memory: "", messages: text ? [{ id: uid("m"), role: "assistant", text, greeting: true, createdAt: now }] : [], createdAt: now, updatedAt: now, characterIds: [g.characterId] };
 }
 
 /* ---------------- 내보내기 (RisuAI에서 가져올 수 있는 형식) ---------------- */
+const withDecorators = (e: LoreEntry) => (e.decorators?.trim() ? `${e.decorators.trim()}\n${e.content}` : e.content);
 function toCardLore(lore: LoreEntry[]) {
-  return lore.map((e, i) => ({ keys: e.keys, content: e.content, extensions: {}, enabled: e.enabled, insertion_order: i, constant: !!e.always, selective: false, secondary_keys: [], name: e.title, comment: e.title, use_regex: false }));
+  return lore.map((e, i) => ({ keys: e.keys, content: withDecorators(e), extensions: {}, enabled: e.enabled, insertion_order: e.order ?? i, constant: !!e.always, selective: !!e.secondKeys?.length, secondary_keys: e.secondKeys ?? [], name: e.title, comment: e.title, use_regex: !!e.regex }));
 }
 function toRisuLore(lore: LoreEntry[]) {
-  return lore.map((e, i) => ({ key: e.keys.join(", "), secondkey: "", insertorder: 100 - Math.min(i, 99), comment: e.title || e.keys[0] || "", content: e.content, mode: "normal", alwaysActive: !!e.always, selective: false }));
+  return lore.map((e, i) => ({ key: e.keys.join(", "), secondkey: (e.secondKeys ?? []).join(", "), insertorder: e.order ?? 100 - Math.min(i, 99), comment: e.title || e.keys[0] || "", content: withDecorators(e), mode: "normal", alwaysActive: !!e.always, selective: !!e.secondKeys?.length, ...(e.regex ? { useRegex: true } : {}) }));
 }
 
 /** 내보낼 이미지 (바이트 포함) */
@@ -449,7 +474,7 @@ export function characterToCard(c: Character, world?: World, images: ExportImage
     spec_version: "3.0",
     data: {
       name: c.name, description, personality: "", scenario: "", first_mes: greetings[0] ?? "", mes_example: c.speech,
-      creator_notes: "Novel Generator에서 내보낸 캐릭터", system_prompt: "", post_history_instructions: c.instructions ?? "", alternate_greetings: greetings.slice(1), group_only_greetings: [],
+      creator_notes: c.notes ?? "", ...(c.notesByLang && Object.keys(c.notesByLang).length ? { creator_notes_multilingual: c.notesByLang } : {}), system_prompt: "", post_history_instructions: c.instructions ?? "", alternate_greetings: greetings.slice(1), group_only_greetings: [],
       tags: [], creator: "", character_version: "1.0", nickname: c.summary, source: [], creation_date: t, modification_date: t,
       assets: images.map(({ meta }, i) => ({ type: assetType(meta.kind), uri: `embeded://${paths[i]}`, name: meta.name, ext: extOf2(meta.mime) })),
       extensions: { risuai: { viewScreen: c.emotionMode ? "emotion" : "none", customScripts: scripts } },

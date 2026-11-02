@@ -240,7 +240,8 @@ function Reader({ novel: n, index, busy, onIndex, onClose }: { novel: Novel; ind
   const fontSize = useApp((s) => s.settings.readerFontSize);
   const lib = useApp((s) => s.library);
   const images = useApp((s) => s.images);
-  const pool = imagePool(contextFor(n, lib), images);
+  const scriptsOn = useApp((s) => s.settings.risu.scripts);
+  const pool = imagePool(contextFor(n, lib), images, scriptsOn);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(e.text);
   const [rewrite, setRewrite] = useState<string | null>(null);

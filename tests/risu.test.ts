@@ -98,7 +98,7 @@ describe("RisuAI 가져오기", () => {
     expect(w.kind).toBe("world");
     expect(w.description).toBe("### 비\n상시"); // 상시 로어는 설명으로 (모듈 설명은 화면 표시용)
     expect(w.lore.map((e) => [e.title, e.keys, !!e.always])).toEqual([["등불", ["등불", "마력등"], false]]);
-    expect(r.skipped).toEqual(["트리거 스크립트 2개"]); // 내용 없는 정규식 스크립트는 버림
+    expect(r.skipped).toEqual([]); // 트리거는 이제 가져옴 (내용 없는 트리거·정규식은 버림)
     expect(w.scripts).toBeUndefined();
   });
 
@@ -108,9 +108,9 @@ describe("RisuAI 가져오기", () => {
     expect(c).toMatchObject({ kind: "character", name: "서율", summary: "감찰관 · OC" });
     expect(c.profile).toBe("서율는 조합 감찰관이다. 주인공의 상관.\n\n성격: 냉정함\n\n기본 상황: 비 오는 항구\n\n### 날씨\n항상 비가 온다"); // 상시 로어는 프로필로
     expect(c.speech).toBe('서율: "규정은 규정입니다."');
-    expect(c.lore.map((e) => [e.title, e.content, e.enabled, !!e.always])).toEqual([["조합", "항구의 마법 조합", true, false], ["re", "정규식 로어", false, false]]);
+    expect(c.lore.map((e) => [e.title, e.content, e.enabled, !!e.always])).toEqual([["조합", "항구의 마법 조합", true, false], ["re", "정규식 로어", true, false]]);
     expect(r.greeting?.greetings).toEqual(["*서율가 서류를 내려놓는다.* 늦었군요, 주인공.", "서율: 또 만났네요."]);
-    expect(r.skipped).toEqual(["트리거 스크립트 1개"]); // system_prompt가 {{original}}뿐이면 바꾸는 것이 없음
+    expect(r.skipped).toEqual([]); // system_prompt가 {{original}}뿐이면 바꾸는 것이 없음
     expect(r.images).toEqual([]);
     const room = greetingRoom(r.greeting!, 1);
     expect(room.characterIds).toEqual([c.id]);
@@ -273,4 +273,14 @@ describe("패키지 전체 내보내기 → 다시 가져오기", () => {
     expect(await r.images[1].load()).toEqual(WEBP);
     expect(b.source).toMatchObject({ kind: "risu", file: "하루.charx", format: "캐릭터 카드(charx)" });
   });
+});
+
+test("제작자 노트 · 언어별 노트(CCv3 creator_notes_multilingual) 보관과 내보내기", async () => {
+  const r = parseRisuJson({ spec: "chara_card_v3", data: { name: "N", description: "d", creator_notes: "기본 노트", creator_notes_multilingual: { ko: "한국어 노트", en: "English note", ja: "日本語ノート", fr: "" } } })!;
+  const c = r.library[0] as Character;
+  expect(c.notes).toBe("기본 노트");
+  expect(c.notesByLang).toEqual({ ko: "한국어 노트", en: "English note", ja: "日本語ノート" });
+  const back = (await parseRisuFile("n.charx", characterToCharx(c))).library[0] as Character;
+  expect(back.notes).toBe("기본 노트");
+  expect(back.notesByLang).toEqual(c.notesByLang);
 });
