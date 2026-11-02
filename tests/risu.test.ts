@@ -246,3 +246,31 @@ describe("RisuAI 봇: 설정이 상시 로어에, 그림 규칙이 post_history_
     expect(r.skipped).toEqual([]); // {{original}}만 있는 system_prompt는 건너뛴 것이 아님
   });
 });
+
+describe("패키지 전체 내보내기 → 다시 가져오기", () => {
+  test("charx: 이미지·인사말·응답 직전 지시·스크립트(켜진 것만)·감정 이미지 모드·한 줄 소개까지 그대로 돌아온다", async () => {
+    const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 7]);
+    const WEBP = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 9]);
+    const meta = (id: string, name: string, kind: "icon" | "emotion" | "asset", mime: string) => ({ id, ownerId: "c", name, kind, mime, size: 1, createdAt: 0, updatedAt: 0 });
+    const c: Character = {
+      kind: "character", id: "c", name: "하루", summary: "등대지기", profile: "### 하루\n항구의 등대지기", speech: '"늦었네."', lore: [{ id: "l", title: "등대", keys: ["등대"], content: "오래된 등대", enabled: true }],
+      instructions: '<img src="이름"> 으로 표정 출력', greetings: ["인사 A", "인사 B"], emotionMode: true,
+      scripts: [{ comment: "그림", in: '<img src="(.*?)">', out: "{{img::$1}}", type: "editdisplay" }, { comment: "끈 것", in: "x", out: "y", type: "editoutput", disabled: true }],
+      createdAt: 0, updatedAt: 0,
+    };
+    const z = characterToCharx(c, undefined, [
+      { meta: meta("i1", "main", "icon", "image/png"), bytes: PNG },
+      { meta: meta("i2", "harbor/night", "asset", "image/webp"), bytes: WEBP },
+      { meta: meta("i3", "smile", "emotion", "image/png"), bytes: PNG },
+    ]);
+    expect(listZip(z).map((f) => f.name)).toEqual(["assets/icon/image/main.png", "assets/other/image/harbor_night.webp", "assets/emotion/image/smile.png", "module.risum", "card.json"]);
+    const r = await parseRisuFile("하루.charx", z);
+    const b = r.library[0] as Character;
+    expect(b).toMatchObject({ name: "하루", summary: "등대지기", profile: "### 하루\n항구의 등대지기", speech: '"늦었네."', instructions: '<img src="이름"> 으로 표정 출력', greetings: ["인사 A", "인사 B"], emotionMode: true });
+    expect(b.lore.map((l) => l.title)).toEqual(["등대"]);
+    expect(b.scripts?.map((x) => x.comment)).toEqual(["그림"]);
+    expect(r.images.map((x) => [x.name, x.kind])).toEqual([["main", "icon"], ["harbor/night", "asset"], ["smile", "emotion"]]);
+    expect(await r.images[1].load()).toEqual(WEBP);
+    expect(b.source).toMatchObject({ kind: "risu", file: "하루.charx", format: "캐릭터 카드(charx)" });
+  });
+});

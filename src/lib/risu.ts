@@ -262,15 +262,16 @@ function cardToCharacter(cardIn: Any, source: string, moduleLore?: { module: Any
   const fix = (t: string) => fillAssetLists(t, assetNames, emoNames);
   // charx: 정규식 스크립트는 module.risum 으로 옮겨져 있음
   const scripts = [...toScripts(risu.customScripts), ...toScripts(moduleLore?.module.regex)];
+  const greetings = [str(card.first_mes) || str(card.char_greeting), ...strs(card.alternate_greetings)].map((g) => fix(fillMacros(g, name))).filter(Boolean);
   const ch: Character = {
     kind: "character", id, name, summary: str(card.nickname).trim() || tags.join(" · "), profile: fix([profile, parts.body].filter(Boolean).join("\n\n")), speech: fix(speech),
     ...(instructions ? { instructions: fix(instructions) } : {}),
     lore: lore.map((l) => ({ ...l, content: fix(l.content) })),
     ...(scripts.length ? { scripts } : {}),
     ...(risu.viewScreen === "emotion" && emoNames.length ? { emotionMode: true } : {}),
+    ...(greetings.length ? { greetings } : {}), // 인사말은 등장인물에 보관 → 언제든 다른 인사말로 새 이야기
     createdAt: now, updatedAt: now,
   };
-  const greetings = [str(card.first_mes) || str(card.char_greeting), ...strs(card.alternate_greetings)].map((g) => fix(fillMacros(g, name))).filter(Boolean);
   const skipped = skippedOf({ ...risu, ...(moduleLore?.module || {}) }, other);
   // system_prompt는 RisuAI의 기본 프롬프트를 통째로 바꾸는 용도라 쓰지 않음 ({{original}}만 있으면 바꾸는 것이 없음)
   if (sys.replace(/\{\{original\}\}/gi, "").trim()) skipped.unshift("시스템 프롬프트(기본 프롬프트 교체)");
@@ -345,8 +346,17 @@ export function readPngCard(b: Uint8Array): Any | null {
 
 const extOf = (name: string) => name.toLowerCase().split(".").pop() || "";
 
+/** 가져온 등장인물·세계관에 패키지 출처(파일 이름·형식) 표시 */
+export function withSource(r: RisuImport, file: string): RisuImport {
+  const source = { kind: "risu" as const, file, format: r.source, importedAt: Date.now() };
+  return { ...r, library: r.library.map((e) => (e.kind === "persona" ? e : { ...e, source })) };
+}
+
 /** 파일 하나를 판별해 가져오기 (charx · risum · json · png · charx-jpeg) */
 export async function parseRisuFile(name: string, b: Uint8Array): Promise<RisuImport> {
+  return withSource(await parseRisuBytes(name, b), name);
+}
+async function parseRisuBytes(name: string, b: Uint8Array): Promise<RisuImport> {
   const ext = extOf(name);
   if (ext === "risum" || (b[0] === 111 && b[1] === 0 && ext !== "json")) {
     const { module, assetData } = readRisum(b);
@@ -402,30 +412,63 @@ function toRisuLore(lore: LoreEntry[]) {
   return lore.map((e, i) => ({ key: e.keys.join(", "), secondkey: "", insertorder: 100 - Math.min(i, 99), comment: e.title || e.keys[0] || "", content: e.content, mode: "normal", alwaysActive: !!e.always, selective: false }));
 }
 
-/** 등장인물 → Character Card V3 (JSON) */
-export function characterToCard(c: Character, world?: World) {
+/** 내보낼 이미지 (바이트 포함) */
+export interface ExportImage {
+  meta: ImageMeta;
+  bytes: Uint8Array;
+}
+const assetType = (k: ImageMeta["kind"]) => (k === "icon" ? "icon" : k === "emotion" ? "emotion" : "x-risu-asset");
+const assetDir = (k: ImageMeta["kind"]) => (k === "icon" ? "icon" : k === "emotion" ? "emotion" : "other");
+const extOf2 = (mime: string) => (mime === "image/jpeg" ? "jpg" : mime.split("/")[1] || "png");
+/** charx 안의 그림 경로 (이름에 경로 문자가 있으면 바꿈, 겹치면 번호) */
+function assetPaths(images: ExportImage[]): string[] {
+  const used = new Set<string>();
+  return images.map(({ meta }) => {
+    const base = `assets/${assetDir(meta.kind)}/image/${meta.name.replace(/[\\/:*?"<>|]/g, "_") || "image"}`;
+    let p = `${base}.${extOf2(meta.mime)}`;
+    for (let i = 2; used.has(p); i++) p = `${base}_${i}.${extOf2(meta.mime)}`;
+    used.add(p);
+    return p;
+  });
+}
+
+/**
+ * 등장인물 → Character Card V3.
+ * 패키지 전체: 프로필·말투·인사말·응답 직전 지시·로어북·감정 이미지 모드, (images가 있으면) 에셋 목록까지.
+ * 이 앱에서 다시 가져오면 같은 내용으로 돌아온다.
+ */
+export function characterToCard(c: Character, world?: World, images: ExportImage[] = []) {
   const t = Math.floor(Date.now() / 1000);
   const lore = [...c.lore, ...(world ? world.lore : [])].filter((e) => e.enabled);
-  const description = [c.summary, c.profile, world && [`[세계관: ${world.name}]`, world.description, world.rules].filter(Boolean).join("\n")].filter(Boolean).join("\n\n");
+  const description = [c.profile, world && [`[세계관: ${world.name}]`, world.description, world.rules].filter(Boolean).join("\n")].filter(Boolean).join("\n\n");
+  const greetings = c.greetings?.filter((g) => g.trim()) ?? [];
+  const paths = assetPaths(images);
+  const scripts = (c.scripts ?? []).filter((x) => !x.disabled).map(({ disabled: _, ...x }) => x);
   return {
     spec: "chara_card_v3",
     spec_version: "3.0",
     data: {
-      name: c.name, description, personality: "", scenario: "", first_mes: "", mes_example: c.speech,
-      creator_notes: "Novel Generator에서 내보낸 캐릭터", system_prompt: "", post_history_instructions: "", alternate_greetings: [], group_only_greetings: [],
-      tags: [], creator: "", character_version: "1.0", nickname: "", source: [], creation_date: t, modification_date: t, assets: [], extensions: {},
+      name: c.name, description, personality: "", scenario: "", first_mes: greetings[0] ?? "", mes_example: c.speech,
+      creator_notes: "Novel Generator에서 내보낸 캐릭터", system_prompt: "", post_history_instructions: c.instructions ?? "", alternate_greetings: greetings.slice(1), group_only_greetings: [],
+      tags: [], creator: "", character_version: "1.0", nickname: c.summary, source: [], creation_date: t, modification_date: t,
+      assets: images.map(({ meta }, i) => ({ type: assetType(meta.kind), uri: `embeded://${paths[i]}`, name: meta.name, ext: extOf2(meta.mime) })),
+      extensions: { risuai: { viewScreen: c.emotionMode ? "emotion" : "none", customScripts: scripts } },
       character_book: { name: c.name, entries: toCardLore(lore), extensions: {} },
     },
   };
 }
 
-/** 등장인물 → .charx (card.json + module.risum, 이미지 없음) */
-export function characterToCharx(c: Character, world?: World): Uint8Array {
-  const card = characterToCard(c, world);
-  const module = { name: `${c.name} Module`, description: `Module for ${c.name}`, id: uid("risu"), trigger: [], regex: [], lorebook: toRisuLore([...c.lore, ...(world ? world.lore : [])].filter((e) => e.enabled)) };
+/** 등장인물 → .charx (card.json + module.risum + assets/). RisuAI처럼 정규식 스크립트·로어북은 module.risum에 */
+export function characterToCharx(c: Character, world?: World, images: ExportImage[] = []): Uint8Array {
+  const card = characterToCard(c, world, images);
+  const scripts = card.data.extensions.risuai.customScripts;
+  const module = { name: `${c.name} Module`, description: `Module for ${c.name}`, id: uid("risu"), trigger: [], regex: scripts, lorebook: toRisuLore([...c.lore, ...(world ? world.lore : [])].filter((e) => e.enabled)) };
+  const cardOut = { ...card, data: { ...card.data, extensions: { risuai: { viewScreen: card.data.extensions.risuai.viewScreen } } } }; // 스크립트는 module.risum 쪽에만
+  const paths = assetPaths(images);
   return zip([
+    ...images.map((im, i) => ({ name: paths[i], data: im.bytes })),
     { name: "module.risum", data: writeRisum(module) },
-    { name: "card.json", data: JSON.stringify(card, null, 4) },
+    { name: "card.json", data: JSON.stringify(cardOut, null, 4) },
   ]);
 }
 
