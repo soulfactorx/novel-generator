@@ -122,6 +122,8 @@ test("data tab imports a RisuAI character card and starts a story from its greet
   await wait(50);
   expect(document.body.textContent).toContain("캐릭터 카드(V3)");
   expect(document.body.textContent).toContain("로어북 1개");
+  const greet = document.querySelector('select[aria-label="첫 메시지"]') as HTMLSelectElement;
+  await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(greet, "0"); greet.dispatchEvent(new Event("change", { bubbles: true })); });
   await act(async () => [...document.querySelectorAll("button")].find((b) => b.textContent === "가져오기")!.click());
   expect(document.body.textContent).toContain("등장인물 1명, 이야기 1개");
   const s = store.getState();
@@ -152,6 +154,8 @@ test("RisuAI card images: greeting with <img=\"…\"> is turned into the bot's p
   await wait(50);
   expect(document.body.textContent).toContain("이미지 2장");
   expect(document.body.textContent).toContain("정규식 스크립트 1개");
+  const greet = document.querySelector('select[aria-label="첫 메시지"]') as HTMLSelectElement;
+  await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(greet, "0"); greet.dispatchEvent(new Event("change", { bubbles: true })); });
   await act(async () => [...document.querySelectorAll("button")].find((b) => b.textContent === "가져오기")!.click());
   await wait(100);
   expect(document.body.textContent).toContain("이미지 2장");

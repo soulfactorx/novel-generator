@@ -238,10 +238,12 @@ export interface NewRoom {
   worldId?: string;
   characterIds?: string[];
   personaId?: string;
+  greeting?: string; // 첫 메시지(인사말)로 시작
 }
 export function createRoom(opts: NewRoom = {}): string {
   const now = Date.now();
-  const room: Room = { id: uid("r"), title: opts.title?.trim() || "새 이야기", premise: opts.premise ?? "", memory: "", messages: [], createdAt: now, updatedAt: now, characterIds: opts.characterIds ?? [], ...(opts.worldId ? { worldId: opts.worldId } : {}), ...(opts.personaId ? { personaId: opts.personaId } : {}) };
+  const messages: Message[] = opts.greeting?.trim() ? [{ id: uid("m"), role: "assistant", text: opts.greeting.trim(), createdAt: now }] : [];
+  const room: Room = { id: uid("r"), title: opts.title?.trim() || "새 이야기", premise: opts.premise ?? "", memory: "", messages, createdAt: now, updatedAt: now, characterIds: opts.characterIds ?? [], ...(opts.worldId ? { worldId: opts.worldId } : {}), ...(opts.personaId ? { personaId: opts.personaId } : {}) };
   putRoom(room);
   setState({ activeRoomId: room.id });
   return room.id;
@@ -341,7 +343,40 @@ export function importLegacy(data: LegacyImport, withKeys: boolean) {
   if (data.rooms[0]) setState({ activeRoomId: data.rooms[0].id });
 }
 /** RisuAI 파일(charx · risum · json · png) 가져오기. greeting: 첫 메시지(인사말) 번호로 새 이야기 시작 */
-export async function importRisu(data: RisuImport, opts: { greeting?: number } = {}): Promise<{ room: string | null; images: number }> {
+/** 이미 가져온 같은 패키지 (같은 종류·같은 이름이고 RisuAI에서 가져온 것) */
+export function existingPackages(data: Pick<RisuImport, "library">): { incoming: string; existing: Character | World }[] {
+  const out: { incoming: string; existing: Character | World }[] = [];
+  for (const e of data.library) {
+    if (e.kind === "persona") continue;
+    const hit = Object.values(state.library).find((x) => x.kind === e.kind && x.name === e.name && x.id !== e.id && (x as Character | World).source?.kind === "risu") as Character | World | undefined;
+    if (hit) out.push({ incoming: e.id, existing: hit });
+  }
+  return out;
+}
+
+/**
+ * RisuAI 패키지 가져오기. replace: 이미 가져온 같은 패키지를 새 내용으로 교체
+ * (id는 그대로 두어 그 패키지를 쓰던 이야기·소설의 연결이 유지됨, 이미지는 새 것으로 바꿈)
+ */
+export async function importRisu(data: RisuImport, opts: { greeting?: number; replace?: boolean } = {}): Promise<{ room: string | null; images: number; replaced: number }> {
+  const idMap = new Map<string, string>();
+  let replaced = 0;
+  if (opts.replace)
+    for (const { incoming, existing } of existingPackages(data)) {
+      idMap.set(incoming, existing.id);
+      const old = Object.values(state.images).filter((m) => m.ownerId === existing.id).map((m) => m.id);
+      if (old.length) await deleteImages(old);
+      replaced++;
+    }
+  if (idMap.size) {
+    const keep = (e: Entity) => state.library[idMap.get(e.id)!] as Character | World;
+    data = {
+      ...data,
+      library: data.library.map((e) => (idMap.has(e.id) ? ({ ...e, id: idMap.get(e.id)!, createdAt: keep(e).createdAt, ...(e.kind === "character" && keep(e).kind === "character" && (keep(e) as Character).worldId ? { worldId: (keep(e) as Character).worldId } : {}) } as Entity) : e)),
+      images: data.images.map((x) => (idMap.has(x.ownerId) ? { ...x, ownerId: idMap.get(x.ownerId)! } : x)),
+      ...(data.greeting ? { greeting: { ...data.greeting, characterId: idMap.get(data.greeting.characterId) ?? data.greeting.characterId } } : {}),
+    };
+  }
   upsertLibrary(data.library);
   const images = await addImages(data.images);
   data.rooms.forEach((r) => putRoom(r));
@@ -352,7 +387,7 @@ export async function importRisu(data: RisuImport, opts: { greeting?: number } =
     open = r.id;
   }
   if (open) setState({ activeRoomId: open, view: "rooms" });
-  return { room: open, images };
+  return { room: open, images, replaced };
 }
 
 /* ---------------- 이미지 (RisuAI 에셋 · 감정 이미지) ---------------- */

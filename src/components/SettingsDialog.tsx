@@ -1,12 +1,12 @@
 import { useRef, useState, type ReactNode } from "react";
 import { backupLibrary, backupNovels, download, isOwnBackup, makeBackup } from "../lib/backup";
 import { parseLegacyBackup, type LegacyImport } from "../lib/importLegacy";
-import { parseRisuFile, parseRisuJson, type RisuImport } from "../lib/risu";
+import { parseRisuFile, parseRisuJson, withSource, type RisuImport } from "../lib/risu";
 import { listModels } from "../lib/modelList";
 import { testConnection } from "../lib/providers";
 import { CLAUDE_MODELS, GEMINI_MODELS, OPENAI_PRESETS, PROVIDER_LABEL } from "../lib/providers/catalog";
 import { RATING_POLICY } from "../lib/prompt";
-import { getState, importLegacy, importLegacyExtra, importRisu, updateSettings, upsertLibrary, upsertNovels, upsertRooms, useApp } from "../lib/store";
+import { existingPackages, getState, importLegacy, importLegacyExtra, importRisu, updateSettings, upsertLibrary, upsertNovels, upsertRooms, useApp } from "../lib/store";
 import type { ContentRating, ProviderId, Room, Settings, StyleOptions } from "../lib/types";
 import Dialog from "./Dialog";
 import UsageTab from "./UsageTab";
@@ -227,7 +227,8 @@ function DataTab() {
   const [importKeys, setImportKeys] = useState(true);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [risu, setRisu] = useState<RisuImport | null>(null);
-  const [greet, setGreet] = useState(0); // -1: 이야기 만들지 않음
+  const [greet, setGreet] = useState(-1); // -1: 이야기 만들지 않고 라이브러리에만 (인사말은 패키지에 보관)
+  const [replace, setReplace] = useState(true); // 이미 가져온 같은 패키지가 있으면 교체
   const onFile = async (f: File) => {
     setMsg(null);
     setPending(null);
@@ -244,13 +245,15 @@ function DataTab() {
       }
       if (j === undefined) {
         setRisu(await parseRisuFile(f.name, bytes));
-        setGreet(0);
+        setGreet(-1);
+        setReplace(true);
         return;
       }
       const r = parseRisuJson(j);
       if (r) {
-        setRisu(r);
-        setGreet(0);
+        setRisu(withSource(r, f.name));
+        setGreet(-1);
+        setReplace(true);
         return;
       }
       if (isOwnBackup(j)) {
@@ -291,14 +294,14 @@ function DataTab() {
             </div>
           </div>
         )}
-        {risu && <RisuPreview data={risu} greet={greet} setGreet={setGreet} onCancel={() => setRisu(null)} onImport={async () => {
+        {risu && <RisuPreview data={risu} greet={greet} setGreet={setGreet} replace={replace} setReplace={setReplace} onCancel={() => setRisu(null)} onImport={async () => {
           const data = risu;
           setRisu(null);
           setMsg({ ok: true, text: data.images.length ? `⏳ 이미지 ${data.images.length}장을 저장하는 중…` : "⏳ 가져오는 중…" });
-          const res = await importRisu(data, greet >= 0 && data.greeting ? { greeting: greet } : {});
+          const res = await importRisu(data, { ...(greet >= 0 && data.greeting ? { greeting: greet } : {}), replace });
           const c = data.library.filter((e) => e.kind === "character").length, w = data.library.filter((e) => e.kind === "world").length;
           const made = data.rooms.length + (greet >= 0 && data.greeting ? 1 : 0);
-          setMsg({ ok: true, text: `✅ ${[c && `등장인물 ${c}명`, w && `세계관 ${w}개`, res.images && `이미지 ${res.images}장`, made && `이야기 ${made}개`].filter(Boolean).join(", ")}을(를) 가져왔습니다.` });
+          setMsg({ ok: true, text: `✅ ${[c && `등장인물 ${c}명`, w && `세계관 ${w}개`, res.images && `이미지 ${res.images}장`, made && `이야기 ${made}개`].filter(Boolean).join(", ")}을(를) ${res.replaced ? "교체했습니다(기존 패키지 업데이트)" : "가져왔습니다"}.${data.library.some((e) => e.kind !== "persona") ? " [📚 라이브러리]에서 언제든 고치고 다시 시작할 수 있습니다." : ""}` });
         }} />}
         {legacyExtra && (
           <div className="space-y-2 rounded-lg bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
@@ -315,7 +318,9 @@ function DataTab() {
   );
 }
 
-function RisuPreview({ data, greet, setGreet, onImport, onCancel }: { data: RisuImport; greet: number; setGreet: (n: number) => void; onImport: () => void; onCancel: () => void }) {
+function RisuPreview({ data, greet, setGreet, replace, setReplace, onImport, onCancel }: { data: RisuImport; greet: number; setGreet: (n: number) => void; replace: boolean; setReplace: (b: boolean) => void; onImport: () => void; onCancel: () => void }) {
+  useApp((s) => s.library); // 라이브러리가 바뀌면 다시 확인
+  const dup = existingPackages(data);
   const lore = data.library.reduce((n, e) => n + (e.kind === "persona" ? 0 : e.lore.length), 0);
   const scripts = data.library.reduce((n, e) => n + (e.kind === "persona" ? 0 : e.scripts?.length ?? 0), 0);
   const emo = data.images.filter((x) => x.kind === "emotion").length;
@@ -339,12 +344,20 @@ function RisuPreview({ data, greet, setGreet, onImport, onCancel }: { data: Risu
           <p className="hint">봇에 정해진 규칙대로 이야기·소설에서 그림이 나옵니다. 이미지는 이 기기에만 저장되고 동기화되지 않습니다.</p>
         </div>
       )}
+      {data.library.some((e) => e.kind !== "persona") && <p className="hint">📦 패키지 전체(설정·인사말·이미지·스크립트)가 라이브러리에 보관됩니다. 언제든 고쳐 쓰고, 원하는 인사말로 새 이야기나 소설을 시작할 수 있습니다.</p>}
+      {dup.length > 0 && (
+        <div className="space-y-1 rounded-lg border border-amber-300 bg-amber-50 p-2 dark:border-amber-900 dark:bg-amber-950/30">
+          <div>이미 가져온 패키지가 있습니다: <b>{dup.map((d) => d.existing.name).join(", ")}</b>{dup[0].existing.source && <span className="hint"> ({dup[0].existing.source.file}, {new Date(dup[0].existing.source.importedAt).toLocaleDateString("ko-KR")})</span>}</div>
+          <label className="flex items-start gap-2"><input type="radio" className="mt-1" checked={replace} onChange={() => setReplace(true)} /> <span>교체 (업데이트) <span className="hint block">이 파일의 내용과 이미지로 바꿉니다. 그 패키지로 쓴 이야기·소설은 그대로 연결됩니다. 라이브러리에서 직접 고친 내용은 사라집니다.</span></span></label>
+          <label className="flex items-start gap-2"><input type="radio" className="mt-1" checked={!replace} onChange={() => setReplace(false)} /> <span>따로 하나 더 추가</span></label>
+        </div>
+      )}
       {g && (
         <label className="block">
-          <span className="label">첫 메시지로 새 이야기 시작</span>
+          <span className="label">바로 새 이야기 시작 (선택)</span>
           <select className="input" value={greet} onChange={(e) => setGreet(Number(e.target.value))} aria-label="첫 메시지">
-            <option value={-1}>이야기는 만들지 않고 라이브러리에만 추가</option>
-            {g.greetings.map((t, i) => <option key={i} value={i}>{i === 0 ? "기본 인사말" : `다른 인사말 ${i}`}: {t.replace(/\s+/g, " ").slice(0, 50)}</option>)}
+            <option value={-1}>지금은 라이브러리에만 보관</option>
+            {g.greetings.map((t, i) => <option key={i} value={i}>인사말 {i + 1}로 시작: {t.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 50)}</option>)}
           </select>
         </label>
       )}

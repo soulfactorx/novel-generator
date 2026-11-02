@@ -98,6 +98,7 @@ export interface World extends EntityBase {
   rules: string; // 이 세계에서 지켜야 할 규칙·문체 지시
   lore: LoreEntry[];
   scripts?: RegexScript[]; // RisuAI 모듈의 정규식 스크립트
+  source?: PackageSource;
 }
 export interface Character extends EntityBase {
   kind: "character";
@@ -108,6 +109,8 @@ export interface Character extends EntityBase {
   worldId?: string; // 소속 세계관 (선택)
   scripts?: RegexScript[]; // RisuAI 캐릭터의 정규식 스크립트
   instructions?: string; // 응답 직전에 AI에게 주는 지시 (RisuAI post_history_instructions · @@depth 0 로어)
+  greetings?: string[]; // 첫 메시지(인사말) 목록 — 새 이야기를 이 중 하나로 시작
+  source?: PackageSource; // 가져온 패키지 정보 (RisuAI charx 등)
   emotionMode?: boolean; // RisuAI '감정 이미지' 화면: AI가 응답마다 <Emotion="이름">으로 감정 이미지를 고름
 }
 export interface Persona extends EntityBase {
@@ -135,6 +138,14 @@ export interface RegexScript {
   type: string;
   flag?: string;
   ableFlag?: boolean;
+  disabled?: boolean; // 이 앱에서 끈 스크립트 (지우지 않고 보관)
+}
+/** 가져온 패키지: 어디서 왔는지 (같은 봇을 다시 가져올 때 교체할 수 있게) */
+export interface PackageSource {
+  kind: "risu";
+  file: string; // 파일 이름
+  format: string; // "캐릭터 카드(charx)" 등
+  importedAt: number;
 }
 export type EntityKind = Entity["kind"];
 

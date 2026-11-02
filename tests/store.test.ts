@@ -317,3 +317,45 @@ describe("v0.4: fallback, usage, directives, branches", () => {
     expect(s.getState().rooms[id].memory).toBe("");
   });
 });
+
+describe("RisuAI 패키지 보관·재사용", () => {
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const card = (desc: string, greetings: string[]) => ({
+    spec: "chara_card_v3",
+    data: { name: "하루", description: desc, first_mes: greetings[0], alternate_greetings: greetings.slice(1), assets: [{ type: "x-risu-asset", uri: "data:image/png;base64," + btoa(String.fromCharCode(...PNG)), name: "harbor", ext: "png" }] },
+  });
+  test("인사말은 패키지에 보관 → 나중에 다른 인사말로 새 이야기, 같은 파일을 다시 가져오면 교체(연결 유지)", async () => {
+    const s = await freshStore();
+    const { parseRisuJson, withSource } = await import("../src/lib/risu");
+    // 1) 이야기 없이 라이브러리에만
+    await s.importRisu(withSource(parseRisuJson(card("v1 설정", ["인사 A", "인사 B"]))!, "haru.json"), {});
+    const c1 = Object.values(s.getState().library).find((e) => e.name === "하루")! as any;
+    expect(c1.greetings).toEqual(["인사 A", "인사 B"]);
+    expect(c1.source).toMatchObject({ kind: "risu", file: "haru.json" });
+    expect(Object.keys(s.getState().rooms)).toHaveLength(0);
+    expect(Object.values(s.getState().images).filter((m) => m.ownerId === c1.id)).toHaveLength(1);
+    // 2) 나중에 2번 인사말로 새 이야기
+    const roomId = s.createRoom({ characterIds: [c1.id], greeting: c1.greetings[1] });
+    expect(s.getState().rooms[roomId].messages.map((m) => [m.role, m.text])).toEqual([["assistant", "인사 B"]]);
+    // 3) 같은 패키지를 다시 가져오기 → 교체: id·이야기 연결 유지, 내용·이미지는 새 것
+    const { existingPackages } = s;
+    const again = withSource(parseRisuJson(card("v2 설정", ["새 인사"]))!, "haru.json");
+    expect(existingPackages(again).map((d) => d.existing.id)).toEqual([c1.id]);
+    const res = await s.importRisu(again, { replace: true });
+    expect(res.replaced).toBe(1);
+    const chars = Object.values(s.getState().library).filter((e) => e.name === "하루") as any[];
+    expect(chars).toHaveLength(1);
+    expect(chars[0].id).toBe(c1.id);
+    expect(chars[0].profile).toBe("v2 설정");
+    expect(chars[0].greetings).toEqual(["새 인사"]);
+    expect(s.getState().rooms[roomId].characterIds).toEqual([c1.id]);
+    expect(Object.values(s.getState().images).filter((m) => m.ownerId === c1.id)).toHaveLength(1); // 옛 이미지는 지우고 새 이미지
+    // 4) '따로 추가'를 고르면 하나 더
+    await s.importRisu(withSource(parseRisuJson(card("v3", ["x"]))!, "haru.json"), { replace: false });
+    expect(Object.values(s.getState().library).filter((e) => e.name === "하루")).toHaveLength(2);
+    // 새로고침 후에도 유지
+    await s.flush();
+    const s2 = await freshStore();
+    expect((s2.getState().library[c1.id] as any).greetings).toEqual(["새 인사"]);
+  });
+});

@@ -1,11 +1,11 @@
 import { useState, type ReactNode } from "react";
 import { downloadBlob, safeFileName } from "../lib/exporters";
-import { characterToCard, characterToCharx, worldToModule, writeRisum } from "../lib/risu";
-import { createEntity, createRoom, deleteEntity, entitiesOf, updateEntity, useApp } from "../lib/store";
+import { characterToCard, characterToCharx, worldToModule, writeRisum, type ExportImage } from "../lib/risu";
+import { createEntity, createNovel, createRoom, deleteEntity, entitiesOf, getState, loadImageData, updateEntity, useApp } from "../lib/store";
 import type { Character, Entity, EntityKind, Persona, World } from "../lib/types";
 import Dialog from "./Dialog";
 import LoreEditor from "./LoreEditor";
-import { ImageGallery, RisuSettings } from "./ImageGallery";
+import { GreetingsEditor, ImageGallery, PackageBadge, RisuSettings } from "./ImageGallery";
 
 const KINDS: [EntityKind, string, string][] = [
   ["world", "세계관", "🌍"],
@@ -48,17 +48,19 @@ export default function LibraryDialog({ initialKind = "world", onClose }: { init
             ))}
           </div>
         </div>
-        <div className={cur ? "" : "hidden md:block"}>
+        <div className={`min-w-0 ${cur ? "" : "hidden md:block"}`}>
           {!cur ? (
             <p className="hint grid h-full place-items-center py-10">왼쪽에서 항목을 고르거나 새로 추가하세요.</p>
           ) : (
             <div className="space-y-4">
               <button className="btn-ghost px-2 text-xs md:hidden" onClick={() => setSel(null)}>← 목록</button>
+              {cur.kind !== "persona" && <PackageBadge e={cur} />}
               {cur.kind === "world" && <WorldForm w={cur} />}
-              {cur.kind === "character" && <CharacterForm c={cur} worlds={entitiesOf(lib, "world")} />}
+              {cur.kind === "character" && <CharacterForm c={cur} worlds={entitiesOf(lib, "world")} onStart={(g) => { startStory(cur, lib, g); onClose(); }} />}
               {cur.kind === "persona" && <PersonaForm p={cur} />}
               <div className="flex flex-wrap gap-2 border-t border-stone-200 pt-3 dark:border-stone-800">
-                <button className="btn-primary" onClick={() => { startStory(cur, lib); onClose(); }}>✒️ 이 설정으로 새 이야기</button>
+                <button className="btn-primary" onClick={() => { startStory(cur, lib, cur.kind === "character" ? cur.greetings?.find((g) => g.trim()) : undefined); onClose(); }} title={cur.kind === "character" && cur.greetings?.length ? "1번 인사말로 시작합니다. 다른 인사말은 위 인사말 목록에서 고르세요." : undefined}>✒️ 이 설정으로 새 이야기</button>
+                {cur.kind !== "persona" && <button className="btn-ghost border border-stone-300 dark:border-stone-700" onClick={() => { startNovel(cur, lib); onClose(); }}>📖 이 설정으로 새 소설</button>}
                 <RisuExport e={cur} lib={lib} />
                 <button className="btn-danger ml-auto" onClick={() => { const n = usedBy(cur.id); if (confirm(`'${cur.name}'을(를) 삭제할까요?${n ? `\n이 항목을 쓰는 이야기 ${n}개에서는 연결만 해제되고 이야기는 남습니다.` : ""}`)) { deleteEntity(cur.id); setSel(null); } }}>삭제</button>
               </div>
@@ -77,25 +79,40 @@ function RisuExport({ e, lib }: { e: Entity; lib: Record<string, Entity> }) {
   if (e.kind === "world")
     return <button className="btn-ghost border border-stone-300 dark:border-stone-700" title="RisuAI 모듈(로어북)로 내보내기" onClick={() => downloadBlob(`${name}.risum`, writeRisum(worldToModule(e)) as BlobPart, "application/octet-stream")}>⬇ RisuAI 모듈(.risum)</button>;
   const w = e.worldId && lib[e.worldId]?.kind === "world" ? (lib[e.worldId] as World) : undefined;
+  const exportCharx = async () => {
+    // 패키지 전체: 이미지까지 담아 내보낸다 (다른 기기로 옮기거나 백업할 때)
+    const metas = Object.values(getState().images).filter((m) => m.ownerId === e.id).sort((a, b) => a.createdAt - b.createdAt);
+    const images: ExportImage[] = [];
+    for (const meta of metas) {
+      const bytes = await loadImageData(meta.id).catch(() => null);
+      if (bytes) images.push({ meta, bytes });
+    }
+    downloadBlob(`${name}.charx`, characterToCharx(e, w, images) as BlobPart, "application/zip");
+  };
   return (
     <>
-      <button className="btn-ghost border border-stone-300 dark:border-stone-700" title={`RisuAI 캐릭터 카드로 내보내기${w ? " (소속 세계관 포함)" : ""}`} onClick={() => downloadBlob(`${name}.charx`, characterToCharx(e, w) as BlobPart, "application/zip")}>⬇ RisuAI 카드(.charx)</button>
+      <button className="btn-ghost border border-stone-300 dark:border-stone-700" title={`이미지·인사말·스크립트까지 패키지 전체를 RisuAI 카드로 내보내기${w ? " (소속 세계관 포함)" : ""}. 다른 기기로 옮기거나 백업할 때 쓰세요.`} onClick={() => void exportCharx()}>⬇ 패키지(.charx)</button>
       <button className="btn-ghost border border-stone-300 dark:border-stone-700" title="Character Card V3 JSON" onClick={() => downloadBlob(`${name}.json`, JSON.stringify(characterToCard(e, w), null, 2), "application/json")}>⬇ .json</button>
     </>
   );
 }
 
 function subtitle(e: Entity, lib: Record<string, Entity>): string {
-  if (e.kind === "world") return `${e.lore.length ? `로어 ${e.lore.length} · ` : ""}${e.description.slice(0, 40) || "설명 없음"}`;
-  if (e.kind === "character") return [e.summary, e.worldId && lib[e.worldId]?.name].filter(Boolean).join(" · ") || "소개 없음";
+  if (e.kind === "world") return `${e.source ? "📦 · " : ""}${e.lore.length ? `로어 ${e.lore.length} · ` : ""}${e.description.slice(0, 40) || "설명 없음"}`;
+  if (e.kind === "character") return [e.source && "📦", e.summary, e.worldId && lib[e.worldId]?.name].filter(Boolean).join(" · ") || "소개 없음";
   return e.profile.slice(0, 40) || "소개 없음";
 }
 
-/** 라이브러리 항목에서 바로 이야기 시작 */
-function startStory(e: Entity, lib: Record<string, Entity>) {
+/** 라이브러리 항목에서 바로 이야기 시작 (greeting: 첫 메시지) */
+function startStory(e: Entity, lib: Record<string, Entity>, greeting?: string) {
   if (e.kind === "world") createRoom({ title: e.name, worldId: e.id, characterIds: entitiesOf(lib, "character").filter((c) => c.worldId === e.id).map((c) => c.id) });
-  else if (e.kind === "character") createRoom({ title: `${e.name}와(과)의 이야기`, characterIds: [e.id], ...(e.worldId && lib[e.worldId] ? { worldId: e.worldId } : {}) });
+  else if (e.kind === "character") createRoom({ title: `${e.name}와(과)의 이야기`, characterIds: [e.id], ...(e.worldId && lib[e.worldId] ? { worldId: e.worldId } : {}), greeting });
   else createRoom({ personaId: e.id });
+}
+/** 라이브러리 항목으로 소설 기획 시작 (기획 탭에 세계관·인물이 채워짐) */
+function startNovel(e: Character | World, lib: Record<string, Entity>) {
+  if (e.kind === "world") createNovel({ title: e.name, worldId: e.id, characterIds: entitiesOf(lib, "character").filter((c) => c.worldId === e.id).map((c) => c.id) });
+  else createNovel({ title: e.name, characterIds: [e.id], ...(e.worldId && lib[e.worldId] ? { worldId: e.worldId } : {}) });
 }
 
 function F({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
@@ -126,7 +143,7 @@ function WorldForm({ w }: { w: World }) {
   );
 }
 
-function CharacterForm({ c, worlds }: { c: Character; worlds: World[] }) {
+function CharacterForm({ c, worlds, onStart }: { c: Character; worlds: World[]; onStart: (greeting: string) => void }) {
   const up = (p: Partial<Character>) => updateEntity<Character>(c.id, p);
   return (
     <>
@@ -149,6 +166,7 @@ function CharacterForm({ c, worlds }: { c: Character; worlds: World[] }) {
       <F label="응답 직전 지시 (선택)" hint="AI가 응답(소설은 회차)을 쓰기 직전에 매번 전달됩니다. 상태창 형식, 그림 표시 규칙처럼 꼭 지켜야 하는 출력 규칙을 적습니다. RisuAI 카드의 post_history_instructions가 여기로 들어옵니다.">
         <textarea className="input min-h-20" value={c.instructions ?? ""} onChange={(e) => up({ instructions: e.target.value })} aria-label="응답 직전 지시" />
       </F>
+      <GreetingsEditor c={c} onStart={onStart} />
       <LoreEditor entries={c.lore} onChange={(lore) => up({ lore })} />
       <ImageGallery ownerId={c.id} />
       <RisuSettings e={c} />

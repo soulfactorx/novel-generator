@@ -113,7 +113,7 @@ export function runScripts(text: string, scripts: RegexScript[], mode: ScriptMod
   let data = text;
   let emotion: string | undefined;
   const parsed = scripts
-    .filter((s) => s && s.type === mode && s.in)
+    .filter((s) => s && s.type === mode && s.in && !s.disabled)
     .map((s, i) => {
       const actions: string[] = [];
       let order = 0;

@@ -165,3 +165,7 @@ test("CSS: 주소 안의 ; { } 와 따옴표 때문에 규칙이 깨지지 않�
   const out = scopeCss(css, "rs1");
   expect(out).toBe('.rs1 .status-window{ background-color: #13a9b0; content: "a;b}c" }.rs1 .x{color:red}');
 });
+
+test("꺼 둔 스크립트는 적용하지 않는다", () => {
+  expect(runScripts("a", [sc({ in: "a", out: "b", type: "editoutput", disabled: true }), sc({ in: "a", out: "c", type: "editoutput" })], "editoutput").text).toBe("c");
+});
