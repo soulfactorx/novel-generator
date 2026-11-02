@@ -6,7 +6,7 @@ AI와 함께 소설·롤플레이를 써 내려가는 **브라우저 단독 실�
 **바로 사용하기** → https://soulfactorx.github.io/novel-generator/
 (또는 [Releases](https://github.com/soulfactorx/novel-generator/releases)에서 HTML 파일을 내려받아 브라우저로 열기)
 
-## 기능 (v0.5)
+## 기능 (v0.6)
 - **AI 제공업체**: Google Gemini · Anthropic Claude · OpenAI 호환(OpenRouter, OpenAI, Ollama 등 로컬 서버). 실시간 스트리밍, 자동 재시도, 중단을 지원합니다.
 - **이야기방**: 대화형 이야기 진행. 이야기 설정(세계관·인물)과 장기 기억 메모, 다음 행동 선택지, 다시 생성, 편집·삭제를 지원합니다.
 - **📖 소설 자동 집필**: 기획을 적으면 AI가 회차별 개요를 짜고, 한 화씩 또는 끝까지 연속으로 원고를 씁니다. 읽기 화면, 편집, 다시 쓰기를 지원하고 **EPUB·TXT로 내보낼** 수 있습니다.
@@ -66,6 +66,7 @@ npm run build      # 타입 검사 + dist/index.html (단일 파일)
 - ~~v0.3 소설 자동 집필(개요 → 회차), 서고, TXT/EPUB 내보내기~~ ✅
 - ~~v0.4 사용량·비용 대시보드, 자동 대체 모델, 이야기 진단, 책갈피와 분기~~ ✅
 - ~~v0.5 앱 설치(PWA)·오프라인, 소설 표지, 기기 간 동기화~~ ✅
+- ~~v0.6 RisuAI 호환(charx·risum·카드·로어북·채팅), 봇 이미지·정규식·상태창~~ ✅
 
 ## 라이선스
 [GNU AGPL-3.0](LICENSE) (AGPL-3.0-or-later) · Copyright (c) 2026 soulfactorx
