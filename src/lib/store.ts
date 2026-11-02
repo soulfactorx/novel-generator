@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { CHOICE_MARKER, previewText, splitChoices } from "./choices";
 import { deleteKV, getImageData, loadAll, putImages, putKV, putRecords, requestPersist } from "./db";
-import { imagePool, imagePromptSection, runScripts, shrinkImage, sniffImage, uniqueName, type ImagePool } from "./images";
+import { imagePool, imagePromptSection, runScripts, shrinkImage, sniffMedia, uniqueName, type ImagePool } from "./images";
 import { uid } from "./id";
 import { libraryFromExtra, type LegacyImport } from "./importLegacy";
 import { greetingRoom, type RisuImage, type RisuImport } from "./risu";
@@ -417,9 +417,9 @@ export async function addImages(list: Pick<RisuImage, "ownerId" | "name" | "kind
     } catch {
       raw = null;
     }
-    const mime = raw && sniffImage(raw);
+    const mime = raw && sniffMedia(raw, it.name.split(".").pop() ?? "");
     if (!raw || !mime) continue;
-    const { bytes, mime: m2 } = await shrinkImage(raw, mime);
+    const { bytes, mime: m2 } = mime.startsWith("image/") ? await shrinkImage(raw, mime) : { bytes: raw, mime }; // 소리·영상은 그대로
     const names = namesOf(it.ownerId);
     const name = uniqueName(it.name, names);
     names.push(name);
@@ -481,9 +481,27 @@ export function displayCbs(room: Room, msgId: string | null): ((t: string) => st
   return fn;
 }
 
+/** 이야기에 연결된 봇의 온보딩(시작 설정 화면) — 꺼져 있거나 내용이 없으면 null */
+export function onboardingFor(room: Pick<Room, "worldId" | "personaId" | "characterIds">): { owner: Character | World; onboarding: NonNullable<Character["risu"]>["onboarding"] & object } | null {
+  const ctx = contextFor(room);
+  for (const o of [...ctx.characters, ...(ctx.world ? [ctx.world] : [])]) {
+    const ob = o.risu?.onboarding;
+    if (ob?.enabled && (ob.mode === "html" ? ob.html.trim() : ob.questions.length)) return { owner: o, onboarding: ob };
+  }
+  return null;
+}
+/** 온보딩 답을 이야기 변수에 기록하고 마침 표시 */
+export function completeOnboarding(roomId: string, answers: Record<string, string>) {
+  const r = state.rooms[roomId];
+  if (!r) return;
+  const vars = { ...(r.vars ?? {}) };
+  for (const [k, v] of Object.entries(answers)) if (k) vars[k] = v;
+  updateRoom(roomId, { vars, onboardingDone: true });
+}
+
 /** 봇 버튼(risu-trigger · risu-btn) 실행 */
-export async function runRisuTrigger(roomId: string, name: string, id: string | null): Promise<void> {
-  await runRoomTrigger(roomId, "manual", { manualName: name, triggerId: id });
+export async function runRisuTrigger(roomId: string, name: string, id: string | null, meta?: object): Promise<void> {
+  await runRoomTrigger(roomId, "manual", { manualName: name, triggerId: id, meta });
 }
 
 /* ---------------- RisuAI 트리거 · Lua ---------------- */
@@ -558,7 +576,7 @@ export interface TriggerRun {
  * 이야기방의 RisuAI 트리거 실행 (Lua + 블록 트리거).
  * mode: start(보내기 직전) · input(내 입력 후) · output(응답 후) · manual(버튼)
  */
-export async function runRoomTrigger(roomId: string, mode: "start" | "input" | "output" | "manual", arg: { manualName?: string; triggerId?: string | null } = {}): Promise<TriggerRun> {
+export async function runRoomTrigger(roomId: string, mode: "start" | "input" | "output" | "manual", arg: { manualName?: string; triggerId?: string | null; meta?: object } = {}): Promise<TriggerRun> {
   const room = state.rooms[roomId];
   const s = state.settings.risu;
   if (!room) return { stop: false };
@@ -573,9 +591,11 @@ export async function runRoomTrigger(roomId: string, mode: "start" | "input" | "
     for (const t of triggers) {
       const lua = (t.effect ?? []).find((e) => e?.type === "triggerlua" && typeof e.code === "string");
       if (!lua || t.effect?.[0]?.type !== "triggerlua") continue;
-      const isButton = mode === "manual" && !!arg.manualName;
-      const luaMode = isButton ? (arg.manualName!.startsWith("__btn:") ? "onButtonClick" : arg.manualName!) : mode;
-      const r = await runLua(lua.code!, luaMode, { ...host, lowLevelAccess: t.lowLevelAccess, get chat() { return host.chat; }, set chat(v) { host.chat = v; } }, isButton && luaMode === "onButtonClick" ? arg.manualName!.slice(6) : undefined);
+      const name = mode === "manual" ? arg.manualName ?? "" : "";
+      // risu-btn → onButtonClick(값), risu-form → onFormSubmit(이름, {data}), risu-trigger → 그 이름의 함수
+      const luaMode = !name ? mode : name.startsWith("__btn:") ? "onButtonClick" : name.startsWith("__form:") ? "onFormSubmit" : name;
+      const data = luaMode === "onButtonClick" ? name.slice(6) : luaMode === "onFormSubmit" ? name.slice(7) : undefined;
+      const r = await runLua(lua.code!, luaMode, { ...host, lowLevelAccess: t.lowLevelAccess, get chat() { return host.chat; }, set chat(v) { host.chat = v; } }, data, arg.meta ?? {});
       if (r.error) console.warn("[Lua]", r.error);
       stop ||= r.stop;
     }

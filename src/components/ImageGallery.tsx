@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { imagePool } from "../lib/images";
+import { imagePool, isAudio, isVideo } from "../lib/images";
 import RisuText from "./RisuText";
 import TogglePanel from "./TogglePanel";
 import { parseToggles } from "../lib/cbs";
@@ -29,7 +29,7 @@ export function ImageGallery({ ownerId }: { ownerId: string }) {
         <span className="label mb-0">🖼 이미지 {list.length > 0 && `${list.length}장`}</span>
         {list.length > 24 && <button className="btn-ghost px-2 py-0.5 text-xs" onClick={() => setOpen(!open)}>{open ? "접기" : "펼치기"}</button>}
         <button className="btn-ghost ml-auto px-2 py-0.5 text-xs" disabled={busy} onClick={() => fileRef.current?.click()}>{busy ? "저장 중…" : "+ 이미지 추가"}</button>
-        <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { if (e.target.files?.length) void add(e.target.files); e.target.value = ""; }} />
+        <input ref={fileRef} type="file" accept="image/*,audio/*,video/*" multiple className="hidden" onChange={(e) => { if (e.target.files?.length) void add(e.target.files); e.target.value = ""; }} />
       </div>
       {list.length === 0 && <p className="hint">AI가 {"{{img::이름}}"} 으로 부를 수 있는 그림입니다. RisuAI 캐릭터 카드(charx)를 가져오면 봇의 에셋·감정 이미지가 여기에 들어옵니다.</p>}
       {open && list.length > 0 && (
@@ -37,7 +37,7 @@ export function ImageGallery({ ownerId }: { ownerId: string }) {
           {list.map((m) => (
             <div key={m.id} className="space-y-1 rounded-lg border border-stone-200 p-1 dark:border-stone-800">
               <div className="relative aspect-square overflow-hidden rounded bg-stone-100 dark:bg-stone-800">
-                {urls[m.id] && <img src={urls[m.id]} alt={m.name} className="h-full w-full object-cover" loading="lazy" />}
+                {urls[m.id] && (isVideo(m) ? <video src={urls[m.id]} muted loop playsInline className="h-full w-full object-cover" onMouseEnter={(e) => void e.currentTarget.play().catch(() => {})} onMouseLeave={(e) => e.currentTarget.pause()} /> : isAudio(m) ? <div className="grid h-full place-items-center p-1"><span className="text-2xl">🎵</span><audio src={urls[m.id]} controls className="w-full" /></div> : <img src={urls[m.id]} alt={m.name} className="h-full w-full object-cover" loading="lazy" />)}
                 <button className="absolute right-0.5 top-0.5 rounded bg-black/50 px-1 text-xs text-white" onClick={() => { if (confirm(`'${m.name}' 이미지를 삭제할까요?`)) void deleteImages([m.id]); }} aria-label={`${m.name} 삭제`}>✕</button>
               </div>
               <input className="w-full rounded bg-transparent px-1 text-xs outline-none focus:bg-stone-100 dark:focus:bg-stone-800" defaultValue={m.name} key={m.name} onBlur={(e) => e.target.value.trim() && e.target.value !== m.name && void renameImage(m.id, e.target.value)} aria-label="이미지 이름" title="AI가 이 이름으로 그림을 부릅니다" />
