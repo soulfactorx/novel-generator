@@ -1,4 +1,6 @@
 import { useState, type ReactNode } from "react";
+import { downloadBlob, safeFileName } from "../lib/exporters";
+import { characterToCard, characterToCharx, worldToModule, writeRisum } from "../lib/risu";
 import { createEntity, createRoom, deleteEntity, entitiesOf, updateEntity, useApp } from "../lib/store";
 import type { Character, Entity, EntityKind, Persona, World } from "../lib/types";
 import Dialog from "./Dialog";
@@ -56,6 +58,7 @@ export default function LibraryDialog({ initialKind = "world", onClose }: { init
               {cur.kind === "persona" && <PersonaForm p={cur} />}
               <div className="flex flex-wrap gap-2 border-t border-stone-200 pt-3 dark:border-stone-800">
                 <button className="btn-primary" onClick={() => { startStory(cur, lib); onClose(); }}>✒️ 이 설정으로 새 이야기</button>
+                <RisuExport e={cur} lib={lib} />
                 <button className="btn-danger ml-auto" onClick={() => { const n = usedBy(cur.id); if (confirm(`'${cur.name}'을(를) 삭제할까요?${n ? `\n이 항목을 쓰는 이야기 ${n}개에서는 연결만 해제되고 이야기는 남습니다.` : ""}`)) { deleteEntity(cur.id); setSel(null); } }}>삭제</button>
               </div>
             </div>
@@ -63,6 +66,21 @@ export default function LibraryDialog({ initialKind = "world", onClose }: { init
         </div>
       </div>
     </Dialog>
+  );
+}
+
+/** RisuAI에서 가져올 수 있는 파일로 내보내기 (등장인물: charx·json 카드, 세계관: risum 모듈) */
+function RisuExport({ e, lib }: { e: Entity; lib: Record<string, Entity> }) {
+  if (e.kind === "persona") return null;
+  const name = safeFileName(e.name);
+  if (e.kind === "world")
+    return <button className="btn-ghost border border-stone-300 dark:border-stone-700" title="RisuAI 모듈(로어북)로 내보내기" onClick={() => downloadBlob(`${name}.risum`, writeRisum(worldToModule(e)) as BlobPart, "application/octet-stream")}>⬇ RisuAI 모듈(.risum)</button>;
+  const w = e.worldId && lib[e.worldId]?.kind === "world" ? (lib[e.worldId] as World) : undefined;
+  return (
+    <>
+      <button className="btn-ghost border border-stone-300 dark:border-stone-700" title={`RisuAI 캐릭터 카드로 내보내기${w ? " (소속 세계관 포함)" : ""}`} onClick={() => downloadBlob(`${name}.charx`, characterToCharx(e, w) as BlobPart, "application/zip")}>⬇ RisuAI 카드(.charx)</button>
+      <button className="btn-ghost border border-stone-300 dark:border-stone-700" title="Character Card V3 JSON" onClick={() => downloadBlob(`${name}.json`, JSON.stringify(characterToCard(e, w), null, 2), "application/json")}>⬇ .json</button>
+    </>
   );
 }
 

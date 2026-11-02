@@ -1,0 +1,312 @@
+/**
+ * RisuAI 파일 가져오기 · 내보내기
+ * - 캐릭터 카드: .charx(ZIP: card.json + module.risum), .json(Character Card V1/V2/V3), .png(tEXt chara/ccv3)
+ * - 모듈: .risum(RisuAI 모듈 바이너리), 모듈 JSON(type: risuModule)
+ * - 로어북 JSON(type: risu / SillyTavern world info), 채팅 JSON(type: risuChat / risuAllChats)
+ * 정규식 스크립트·트리거·Lua·HTML 배경·이미지 에셋은 이 앱에서 쓰지 않으므로 가져오지 않는다.
+ */
+import { zip } from "./exporters";
+import { uid } from "./id";
+import type { Character, Entity, LoreEntry, Message, Room, World } from "./types";
+import { findZip, listZip } from "./unzip";
+
+type Any = Record<string, any>;
+const str = (v: unknown) => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "");
+const arr = (v: unknown): Any[] => (Array.isArray(v) ? v.filter((x) => x && typeof x === "object") : []);
+const strs = (v: unknown): string[] => (Array.isArray(v) ? v.map(str).map((s) => s.trim()).filter(Boolean) : []);
+
+/* ---------------- RPack: RisuAI .risum 에 쓰이는 바이트 치환 (원본: RisuAI src/ts/rpack, 호환을 위한 변환표) ---------------- */
+// prettier-ignore
+const RPACK_ENCODE = new Uint8Array([196,13,30,11,189,43,63,85,252,69,110,245,102,83,79,26,224,187,48,148,134,186,107,191,65,80,111,155,239,222,183,16,97,23,32,223,50,137,168,157,109,171,201,144,0,12,93,175,210,193,86,229,22,100,145,130,101,116,151,202,35,214,82,209,255,180,160,232,47,138,88,56,90,96,25,150,73,219,215,200,59,62,67,75,165,99,71,170,106,41,146,244,21,207,98,52,120,211,29,60,226,5,142,42,87,14,27,205,76,45,242,64,44,37,121,72,15,178,122,181,167,108,55,230,156,123,84,126,254,135,220,154,2,228,51,162,235,177,46,3,221,153,166,176,231,213,136,24,131,124,246,190,225,92,159,195,33,70,31,8,78,208,118,18,95,238,253,143,68,234,163,94,139,40,9,53,158,105,204,10,199,133,7,173,74,243,119,233,103,212,218,132,128,147,182,77,115,250,39,38,127,4,198,251,241,114,57,81,194,54,169,104,172,248,237,197,185,203,206,117,164,61,129,217,66,112,28,149,17,188,216,140,152,249,89,161,19,247,20,125,179,236,113,192,227,141,240,1,174,91,49,6,36,34,58,184]);
+const RPACK_DECODE = (() => {
+  const d = new Uint8Array(256);
+  RPACK_ENCODE.forEach((v, i) => (d[v] = i));
+  return d;
+})();
+const rpack = (data: Uint8Array, map: Uint8Array) => data.map((b) => map[b]);
+
+/** .risum → 모듈 JSON (에셋은 개수만 센다) */
+export function readRisum(b: Uint8Array): { module: Any; assets: number } {
+  if (b.length < 6 || b[0] !== 111) throw new Error("RisuAI 모듈(.risum) 파일이 아닙니다.");
+  if (b[1] !== 0) throw new Error("지원하지 않는 .risum 버전입니다.");
+  const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const len = view.getUint32(2, true);
+  if (6 + len > b.length) throw new Error(".risum 파일이 손상되었습니다.");
+  const main = JSON.parse(new TextDecoder().decode(rpack(b.subarray(6, 6 + len), RPACK_DECODE)));
+  if (main?.type !== "risuModule" || !main.module) throw new Error("RisuAI 모듈 데이터가 아닙니다.");
+  let p = 6 + len;
+  let assets = 0;
+  while (p < b.length && b[p] === 1) {
+    p += 5 + view.getUint32(p + 1, true);
+    assets++;
+  }
+  return { module: main.module, assets };
+}
+
+export function writeRisum(module: Any): Uint8Array {
+  const main = rpack(new TextEncoder().encode(JSON.stringify({ module, type: "risuModule" }, null, 2)), RPACK_ENCODE);
+  const out = new Uint8Array(6 + main.length + 1);
+  out[0] = 111;
+  out[1] = 0;
+  new DataView(out.buffer).setUint32(2, main.length, true);
+  out.set(main, 6);
+  out[out.length - 1] = 0; // 에셋 없음 · 끝
+  return out;
+}
+
+/* ---------------- 공통 변환 ---------------- */
+const USER_NAME = "주인공";
+/** {{char}}·<char>·{{user}}·<user> 치환 */
+export function fillMacros(s: string, charName: string): string {
+  return s
+    .replace(/\{\{\s*char\s*\}\}|<char>|<bot>/gi, charName)
+    .replace(/\{\{\s*user\s*\}\}|<user>/gi, USER_NAME)
+    .replace(/\r\n/g, "\n")
+    .trim();
+}
+/** RisuAI 로어 데코레이터(@@depth 0 등) 줄 제거 */
+const stripDecorators = (s: string) => s.replace(/^@@@?[a-z_]+[^\n]*\n?/gim, "").trim();
+
+interface RawLore {
+  title: string;
+  keys: string[];
+  content: string;
+  always: boolean;
+  enabled: boolean;
+  regex: boolean;
+}
+function toLore(r: RawLore, name: string): LoreEntry | null {
+  const content = fillMacros(stripDecorators(r.content), name);
+  if (!content) return null;
+  // 정규식 키는 이 앱에서 매칭할 수 없음 → 키 없이 꺼 둔 상태로 보관
+  const keys = r.regex ? [] : [...new Set(r.keys.map((k) => fillMacros(k, name)).filter(Boolean))];
+  const always = r.always || (!r.regex && !keys.length);
+  return { id: uid("l"), title: fillMacros(r.title, name) || keys[0] || "", keys, content, enabled: r.enabled && !(r.regex && !r.always), ...(always ? { always: true } : {}) };
+}
+const splitKeys = (s: string) => s.split(",").map((k) => k.trim()).filter(Boolean);
+
+/** RisuAI 로어북 항목(모듈·캐릭터 globalLore·로어북 JSON) */
+const fromRisuLore = (list: unknown, name: string) =>
+  arr(list)
+    .filter((e) => e.mode !== "folder")
+    .map((e) => toLore({ title: str(e.comment), keys: splitKeys(str(e.key)), content: str(e.content), always: !!e.alwaysActive || e.mode === "constant", enabled: true, regex: !!e.useRegex }, name))
+    .filter((x): x is LoreEntry => !!x);
+
+/** Character Card V2/V3 character_book 항목 */
+const fromCardLore = (list: unknown, name: string) =>
+  arr(list)
+    .filter((e) => e.extensions?.risu_folder !== true && e.mode !== "folder")
+    .map((e) => toLore({ title: str(e.comment) || str(e.name), keys: strs(e.keys).length ? strs(e.keys) : splitKeys(str(e.keys)), content: str(e.content), always: !!e.constant, enabled: e.enabled !== false, regex: !!e.use_regex }, name))
+    .filter((x): x is LoreEntry => !!x);
+
+/** SillyTavern world info 등 외부 로어북 (entries: 객체 또는 배열) */
+const fromExternalLore = (entries: unknown, name: string) =>
+  arr(Array.isArray(entries) ? entries : Object.values((entries as Any) || {}))
+    .map((e) => {
+      const keys = strs(e.key).length ? strs(e.key) : strs(e.keys).length ? strs(e.keys) : strs(e.keywords);
+      return toLore({ title: str(e.comment) || str(e.name) || str(e.displayName), keys, content: str(e.content) || str(e.entry) || str(e.text), always: !!(e.constant ?? e.forceActivation), enabled: !e.disable && e.enabled !== false, regex: false }, name);
+    })
+    .filter((x): x is LoreEntry => !!x);
+
+/* ---------------- 가져오기 결과 ---------------- */
+export interface RisuGreeting {
+  characterId: string;
+  name: string;
+  greetings: string[]; // [첫 메시지, ...다른 인사말]
+}
+export interface RisuImport {
+  source: string; // "캐릭터 카드(charx)" 등
+  library: Entity[];
+  rooms: Room[];
+  greeting?: RisuGreeting; // 첫 메시지로 이야기를 시작할 수 있음
+  skipped: string[]; // 가져오지 않은 것
+}
+
+function skippedOf(m: Any, assets = 0): string[] {
+  const out: string[] = [];
+  const n = (v: unknown) => (Array.isArray(v) ? v.length : 0);
+  if (n(m.regex) || n(m.customScripts)) out.push(`정규식 스크립트 ${n(m.regex) + n(m.customScripts)}개`);
+  if (n(m.trigger) || n(m.triggerscript)) out.push(`트리거 ${n(m.trigger) + n(m.triggerscript)}개`);
+  if (str(m.cjs).trim()) out.push("모듈 스크립트");
+  if (str(m.backgroundEmbedding).trim() || str(m.backgroundHTML).trim()) out.push("배경 HTML");
+  if (assets) out.push(`이미지·에셋 ${assets}개`);
+  return out;
+}
+
+function moduleToWorld(m: Any, assets: number, source: string): RisuImport {
+  const name = str(m.name).trim() || "RisuAI 모듈";
+  const lore = fromRisuLore(m.lorebook, name);
+  const now = Date.now();
+  const world: World = { kind: "world", id: uid("w"), name, description: fillMacros(str(m.description), name), rules: "", lore, createdAt: now, updatedAt: now };
+  return { source, library: [world], rooms: [], skipped: skippedOf(m, assets) };
+}
+
+function cardToCharacter(cardIn: Any, source: string, moduleLore?: { module: Any; assets: number }, assetCount = 0): RisuImport {
+  const card = cardIn.spec === "chara_card_v2" || cardIn.spec === "chara_card_v3" ? cardIn.data || {} : cardIn; // V1은 최상위에 필드가 있음
+  const name = (str(card.name) || str(card.char_name)).trim() || "이름 없는 캐릭터";
+  const f = (k: string) => fillMacros(str(card[k]), name);
+  const description = f("description") || fillMacros(str(card.char_persona), name);
+  const profile = [description, f("personality") && `성격: ${f("personality")}`, f("scenario") && `기본 상황: ${f("scenario")}`].filter(Boolean).join("\n\n");
+  const speech = fillMacros(str(card.mes_example) || str(card.example_dialogue), name)
+    .replace(/^<START>\s*$/gim, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  // charx: module.risum 의 로어북이 있으면 그것이 기준(RisuAI와 같음), 없으면 카드의 character_book
+  const modLore = moduleLore ? fromRisuLore(moduleLore.module.lorebook, name) : [];
+  const lore = modLore.length ? modLore : fromCardLore(card.character_book?.entries, name);
+  const now = Date.now();
+  const tags = strs(card.tags).slice(0, 5);
+  const ch: Character = { kind: "character", id: uid("c"), name, summary: str(card.nickname).trim() || tags.join(" · "), profile, speech, lore, createdAt: now, updatedAt: now };
+  const greetings = [str(card.first_mes) || str(card.char_greeting), ...strs(card.alternate_greetings)].map((g) => fillMacros(g, name)).filter(Boolean);
+  const risu: Any = card.extensions?.risuai || {};
+  const skipped = skippedOf({ ...risu, ...(moduleLore?.module || {}) }, assetCount + (moduleLore?.assets || 0));
+  if (str(card.system_prompt).trim() || str(card.post_history_instructions).trim()) skipped.unshift("시스템 프롬프트");
+  return { source, library: [ch], rooms: [], ...(greetings.length ? { greeting: { characterId: ch.id, name, greetings } } : {}), skipped };
+}
+
+function chatsToRooms(j: Any): RisuImport {
+  const chats = arr(Array.isArray(j.data) ? j.data : [j.data]);
+  const now = Date.now();
+  const rooms: Room[] = chats
+    .map((c, i) => {
+      const list = arr(c.message).filter((m) => (m.role === "user" || m.role === "char") && !m.isComment && str(m.data).trim());
+      const base = Number(c.lastDate) || now;
+      const messages: Message[] = list.map((m, k) => ({ id: uid("m"), role: m.role === "user" ? "user" : "assistant", text: str(m.data).trim(), createdAt: Number(m.time) || base - (list.length - k) }));
+      for (let k = 1; k < messages.length; k++) if (messages[k].createdAt <= messages[k - 1].createdAt) messages[k].createdAt = messages[k - 1].createdAt + 1;
+      const last = messages[messages.length - 1]?.createdAt || now;
+      return { id: uid("r"), title: str(c.name).trim() || `RisuAI 대화 ${i + 1}`, premise: str(c.note).trim(), memory: "", messages, createdAt: messages[0]?.createdAt || last, updatedAt: last, characterIds: [] } satisfies Room;
+    })
+    .filter((r) => r.messages.length);
+  if (!rooms.length) throw new Error("가져올 대화가 없습니다.");
+  return { source: "RisuAI 채팅", library: [], rooms, skipped: [] };
+}
+
+/** JSON 객체를 판별해 변환 (RisuAI 형식이 아니면 null) */
+export function parseRisuJson(j: unknown): RisuImport | null {
+  if (!j || typeof j !== "object" || Array.isArray(j)) return null;
+  const o = j as Any;
+  if (o.spec === "chara_card_v2" || o.spec === "chara_card_v3") return cardToCharacter(o, o.spec === "chara_card_v3" ? "캐릭터 카드(V3)" : "캐릭터 카드(V2)", undefined, arr(o.data?.assets).filter((a) => a.type !== "icon").length);
+  if (o.type === "risuModule") return moduleToWorld(o.module && typeof o.module === "object" ? o.module : o, 0, "RisuAI 모듈");
+  if (o.type === "risu" && Array.isArray(o.data)) return moduleToWorld({ name: str(o.name) || "가져온 로어북", description: str(o.description), lorebook: o.data }, 0, "RisuAI 로어북");
+  if ((o.type === "risuChat" || o.type === "risuAllChats") && o.data) return chatsToRooms(o);
+  if (o.entries && typeof o.entries === "object" && !o.app) {
+    const name = str(o.name) || "가져온 로어북";
+    const now = Date.now();
+    const world: World = { kind: "world", id: uid("w"), name, description: str(o.description), rules: "", lore: fromExternalLore(o.entries, name), createdAt: now, updatedAt: now };
+    if (!world.lore.length) return null;
+    return { source: "로어북(World Info)", library: [world], rooms: [], skipped: [] };
+  }
+  // Character Card V1 · 옛 형식
+  if ((o.name || o.char_name) && (o.description || o.char_persona) && (o.first_mes || o.char_greeting) && !o.app) return cardToCharacter(o, "캐릭터 카드(V1)");
+  return null;
+}
+
+/** PNG 카드의 tEXt 청크(ccv3 우선, 없으면 chara) */
+export function readPngCard(b: Uint8Array): Any | null {
+  if (b[0] !== 0x89 || b[1] !== 0x50 || b[2] !== 0x4e || b[3] !== 0x47) return null;
+  const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const found: Record<string, string> = {};
+  const latin = new TextDecoder("latin1");
+  for (let p = 8; p + 8 <= b.length; ) {
+    const len = view.getUint32(p);
+    const type = latin.decode(b.subarray(p + 4, p + 8));
+    if (type === "tEXt") {
+      const data = b.subarray(p + 8, p + 8 + len);
+      const z = data.indexOf(0);
+      const key = latin.decode(data.subarray(0, z));
+      if (key === "ccv3" || key === "chara") found[key] = latin.decode(data.subarray(z + 1));
+    }
+    if (type === "IEND") break;
+    p += 12 + len;
+  }
+  const b64 = found.ccv3 || found.chara;
+  if (!b64) return null;
+  const bin = Uint8Array.from(atob(b64.trim()), (c) => c.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bin));
+}
+
+const extOf = (name: string) => name.toLowerCase().split(".").pop() || "";
+
+/** 파일 하나를 판별해 가져오기 (charx · risum · json · png · charx-jpeg) */
+export async function parseRisuFile(name: string, b: Uint8Array): Promise<RisuImport> {
+  const ext = extOf(name);
+  if (ext === "risum" || (b[0] === 111 && b[1] === 0 && ext !== "json")) {
+    const { module, assets } = readRisum(b);
+    return moduleToWorld(module, assets, "RisuAI 모듈(risum)");
+  }
+  if (b[0] === 0x89 && b[1] === 0x50) {
+    const card = readPngCard(b);
+    if (!card) throw new Error("이 PNG에는 캐릭터 카드 정보가 없습니다.");
+    const r = parseRisuJson(card);
+    if (!r?.library.length) throw new Error("PNG의 캐릭터 카드 형식을 알 수 없습니다.");
+    return { ...r, source: "캐릭터 카드(PNG)" };
+  }
+  if (ext === "charx" || (b[0] === 0x50 && b[1] === 0x4b) || ((ext === "jpg" || ext === "jpeg") && findZip(b))) {
+    const files = listZip(b);
+    const cardFile = files.find((f) => f.name === "card.json");
+    if (!cardFile) throw new Error("charx 안에 card.json이 없습니다.");
+    const card = JSON.parse(new TextDecoder().decode(await cardFile.read()));
+    if (card?.spec !== "chara_card_v3") throw new Error("charx의 카드 형식(V3)이 아닙니다.");
+    const modFile = files.find((f) => f.name === "module.risum");
+    const mod = modFile ? readRisum(await modFile.read()) : undefined;
+    const assets = files.filter((f) => f.name.startsWith("assets/")).length;
+    return cardToCharacter(card, "캐릭터 카드(charx)", mod, Math.max(0, assets - 1));
+  }
+  let j: unknown;
+  try {
+    j = JSON.parse(new TextDecoder().decode(b));
+  } catch {
+    throw new Error("지원하지 않는 파일입니다. (charx · risum · json · png)");
+  }
+  const r = parseRisuJson(j);
+  if (!r) throw new Error("RisuAI 형식의 JSON이 아닙니다.");
+  return r;
+}
+
+/** 가져오기에서 고른 인사말로 첫 메시지가 있는 이야기 만들기 */
+export function greetingRoom(g: RisuGreeting, index = 0): Room {
+  const now = Date.now();
+  const text = g.greetings[index] ?? g.greetings[0] ?? "";
+  return { id: uid("r"), title: `${g.name}와(과)의 이야기`, premise: "", memory: "", messages: text ? [{ id: uid("m"), role: "assistant", text, createdAt: now }] : [], createdAt: now, updatedAt: now, characterIds: [g.characterId] };
+}
+
+/* ---------------- 내보내기 (RisuAI에서 가져올 수 있는 형식) ---------------- */
+function toCardLore(lore: LoreEntry[]) {
+  return lore.map((e, i) => ({ keys: e.keys, content: e.content, extensions: {}, enabled: e.enabled, insertion_order: i, constant: !!e.always, selective: false, secondary_keys: [], name: e.title, comment: e.title, use_regex: false }));
+}
+function toRisuLore(lore: LoreEntry[]) {
+  return lore.map((e, i) => ({ key: e.keys.join(", "), secondkey: "", insertorder: 100 - Math.min(i, 99), comment: e.title || e.keys[0] || "", content: e.content, mode: "normal", alwaysActive: !!e.always, selective: false }));
+}
+
+/** 등장인물 → Character Card V3 (JSON) */
+export function characterToCard(c: Character, world?: World) {
+  const t = Math.floor(Date.now() / 1000);
+  const lore = [...c.lore, ...(world ? world.lore : [])].filter((e) => e.enabled);
+  const description = [c.summary, c.profile, world && [`[세계관: ${world.name}]`, world.description, world.rules].filter(Boolean).join("\n")].filter(Boolean).join("\n\n");
+  return {
+    spec: "chara_card_v3",
+    spec_version: "3.0",
+    data: {
+      name: c.name, description, personality: "", scenario: "", first_mes: "", mes_example: c.speech,
+      creator_notes: "Novel Generator에서 내보낸 캐릭터", system_prompt: "", post_history_instructions: "", alternate_greetings: [], group_only_greetings: [],
+      tags: [], creator: "", character_version: "1.0", nickname: "", source: [], creation_date: t, modification_date: t, assets: [], extensions: {},
+      character_book: { name: c.name, entries: toCardLore(lore), extensions: {} },
+    },
+  };
+}
+
+/** 등장인물 → .charx (card.json + module.risum, 이미지 없음) */
+export function characterToCharx(c: Character, world?: World): Uint8Array {
+  const card = characterToCard(c, world);
+  const module = { name: `${c.name} Module`, description: `Module for ${c.name}`, id: uid("risu"), trigger: [], regex: [], lorebook: toRisuLore([...c.lore, ...(world ? world.lore : [])].filter((e) => e.enabled)) };
+  return zip([
+    { name: "module.risum", data: writeRisum(module) },
+    { name: "card.json", data: JSON.stringify(card, null, 4) },
+  ]);
+}
+
+/** 세계관 → RisuAI 모듈 (.risum). 설명·규칙은 '항상' 로어로 넣는다. */
+export function worldToModule(w: World) {
+  const base: LoreEntry[] = [w.description.trim() && { id: "d", title: `${w.name} 설명`, keys: [], content: w.description.trim(), enabled: true, always: true }, w.rules.trim() && { id: "r", title: `${w.name} 규칙`, keys: [], content: w.rules.trim(), enabled: true, always: true }].filter(Boolean) as LoreEntry[];
+  return { name: w.name, description: w.description.slice(0, 200), id: uid("risu"), lorebook: toRisuLore([...base, ...w.lore.filter((e) => e.enabled)]) };
+}

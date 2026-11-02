@@ -3,6 +3,7 @@ import { previewText, splitChoices } from "./choices";
 import { deleteKV, loadAll, putKV, putRecords, requestPersist } from "./db";
 import { uid } from "./id";
 import { libraryFromExtra, type LegacyImport } from "./importLegacy";
+import { greetingRoom, type RisuImport } from "./risu";
 import { formatLore, matchLore, type LoreHit } from "./lore";
 import { buildMemoryRequest, cleanMemory, pendingForMemory } from "./memory";
 import { buildHistory, buildSystemPrompt, outputTokensFor, type StoryContext } from "./prompt";
@@ -332,6 +333,19 @@ export function importLegacy(data: LegacyImport, withKeys: boolean) {
   data.rooms.forEach((r) => putRoom(r));
   if (withKeys && data.settingsPatch.keys) updateSettings({ keys: { ...state.settings.keys, ...data.settingsPatch.keys }, ...(data.settingsPatch.openaiBaseUrl ? { openaiBaseUrl: data.settingsPatch.openaiBaseUrl } : {}) });
   if (data.rooms[0]) setState({ activeRoomId: data.rooms[0].id });
+}
+/** RisuAI 파일(charx · risum · json · png) 가져오기. greeting: 첫 메시지(인사말) 번호로 새 이야기 시작 */
+export function importRisu(data: RisuImport, opts: { greeting?: number } = {}): string | null {
+  upsertLibrary(data.library);
+  data.rooms.forEach((r) => putRoom(r));
+  let open: string | null = data.rooms[0]?.id ?? null;
+  if (data.greeting && opts.greeting !== undefined) {
+    const r = greetingRoom(data.greeting, opts.greeting);
+    putRoom(r);
+    open = r.id;
+  }
+  if (open) setState({ activeRoomId: open, view: "rooms" });
+  return open;
 }
 /** v0.1 에서 보관만 해 둔 세계관·캐릭터를 라이브러리로 */
 export function importLegacyExtra(): number {
