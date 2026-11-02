@@ -32,6 +32,8 @@ export interface Settings {
   krwPerUsd: number; // 원화 환산 표시용
   customPrices: Record<string, { in: number; out: number }>; // 모델별 사용자 지정 단가 (USD/100만 토큰)
   coverModel: string; // AI 표지 그림 모델 (Gemini)
+  /** RisuAI 호환 기능 켜고 끄기 */
+  risu: RisuOptions;
 }
 
 /** 메시지·회차에 붙는 사용량 (usd: 단가를 아는 경우) */
@@ -55,6 +57,7 @@ export interface Message {
   usage?: MessageUsage;
   fallback?: boolean; // 대체 모델로 생성됨
   bookmark?: string; // 책갈피 이름 ("" 도 책갈피)
+  greeting?: boolean; // 인사말(첫 메시지): RisuAI처럼 대화 번호 -1로 다룸
   createdAt: number;
 }
 
@@ -73,6 +76,7 @@ export interface Room {
   memoryUpdatedAt?: number;
   branchOf?: { roomId: string; messageId: string; title: string }; // 분기해 온 원래 이야기
   lastDiagnosis?: { at: number; report: string; directive: string };
+  vars?: Record<string, string>; // RisuAI 채팅 변수 ({{setvar}} · Lua setChatVar)
 }
 
 /* ---------------- 라이브러리: 세계관 · 등장인물 · 주인공(페르소나) ---------------- */
@@ -99,6 +103,7 @@ export interface World extends EntityBase {
   lore: LoreEntry[];
   scripts?: RegexScript[]; // RisuAI 모듈의 정규식 스크립트
   source?: PackageSource;
+  risu?: RisuExtras;
 }
 export interface Character extends EntityBase {
   kind: "character";
@@ -112,6 +117,7 @@ export interface Character extends EntityBase {
   greetings?: string[]; // 첫 메시지(인사말) 목록 — 새 이야기를 이 중 하나로 시작
   notes?: string; // 제작자 노트 (AI에게는 보내지 않음)
   notesByLang?: Record<string, string>; // 언어별 제작자 노트 (CCv3 creator_notes_multilingual: { ko, en, ja … })
+  risu?: RisuExtras;
   source?: PackageSource; // 가져온 패키지 정보 (RisuAI charx 등)
   emotionMode?: boolean; // RisuAI '감정 이미지' 화면: AI가 응답마다 <Emotion="이름">으로 감정 이미지를 고름
 }
@@ -142,6 +148,15 @@ export interface RegexScript {
   ableFlag?: boolean;
   disabled?: boolean; // 이 앱에서 끈 스크립트 (지우지 않고 보관)
 }
+/** RisuAI 봇의 실행 요소 (토글·기본 변수·트리거·Lua·배경 HTML) — 원본 그대로 보관 */
+export interface RisuExtras {
+  toggles?: string; // 사이드바 토글 정의 ("key=이름=select=가,나")
+  defaultVariables?: string; // "key=value" 줄
+  triggers?: unknown[]; // RisuAI triggerscript (블록·Lua)
+  backgroundHTML?: string; // 채팅 배경 HTML·CSS
+  lowLevelAccess?: boolean;
+}
+
 /** 가져온 패키지: 어디서 왔는지 (같은 봇을 다시 가져올 때 교체할 수 있게) */
 export interface PackageSource {
   kind: "risu";
@@ -176,7 +191,17 @@ export const DEFAULT_SETTINGS: Settings = {
   krwPerUsd: 1400,
   customPrices: {},
   coverModel: "gemini-nano-banana-2.1",
+  risu: { cbs: true, scripts: true, triggers: true, lua: true, background: true, markdown: true },
 };
+
+export interface RisuOptions {
+  cbs: boolean; // {{…}} 문법·변수·토글
+  scripts: boolean; // 정규식 스크립트
+  triggers: boolean; // 트리거 스크립트 (블록)
+  lua: boolean; // Lua 트리거 · 버튼
+  background: boolean; // 배경 HTML·CSS
+  markdown: boolean; // *기울임* **굵게** 표시
+}
 
 /** 저장된 설정을 기본값과 병합 (새 항목이 추가돼도 안전) */
 export function normalizeSettings(raw: unknown): Settings {
@@ -188,6 +213,7 @@ export function normalizeSettings(raw: unknown): Settings {
     models: { ...DEFAULT_SETTINGS.models, ...(r.models || {}) },
     style: { ...DEFAULT_SETTINGS.style, ...(r.style || {}) },
     fallback: { ...DEFAULT_SETTINGS.fallback, ...(r.fallback || {}) },
+    risu: { ...DEFAULT_SETTINGS.risu, ...(r.risu || {}) },
     customPrices: r.customPrices && typeof r.customPrices === "object" ? r.customPrices : {},
     version: 1,
   };

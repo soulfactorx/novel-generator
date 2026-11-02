@@ -1,6 +1,8 @@
 import { useRef, useState } from "react";
 import { imagePool } from "../lib/images";
 import RisuText from "./RisuText";
+import TogglePanel from "./TogglePanel";
+import { parseToggles } from "../lib/cbs";
 import { useImageUrls } from "../lib/imageUrls";
 import { addImages, deleteImages, renameImage, updateEntity, useApp } from "../lib/store";
 import type { Character, ImageMeta, RegexScript, World } from "../lib/types";
@@ -177,6 +179,17 @@ export function CreatorNotes({ c }: { c: Character }) {
         <div className="max-h-96 overflow-y-auto text-sm"><RisuText text={text} pool={imagePool({ characters: [c] }, images)} /></div>
         <p className="hint">봇 제작자가 남긴 설명입니다. AI에게는 보내지 않습니다.</p>
       </div>
+    </details>
+  );
+}
+
+/** 패키지의 토글(봇 설정) */
+export function PackageToggles({ e }: { e: Character | World }) {
+  if (!e.risu?.toggles?.trim()) return null;
+  return (
+    <details className="rounded-lg border border-stone-200 dark:border-stone-800">
+      <summary className="cursor-pointer px-3 py-2 text-sm font-semibold">🎛 봇 설정 (토글)</summary>
+      <div className="border-t border-stone-200 px-3 py-2 dark:border-stone-800"><TogglePanel groups={[{ owner: e.name, toggles: parseToggles(e.risu.toggles) }]} /></div>
     </details>
   );
 }

@@ -12,7 +12,7 @@
 import { zip } from "./exporters";
 import { uid } from "./id";
 import { fillAssetLists } from "./images";
-import type { Character, Entity, ImageMeta, LoreEntry, Message, RegexScript, Room, World } from "./types";
+import type { Character, Entity, ImageMeta, LoreEntry, Message, RegexScript, RisuExtras, Room, World } from "./types";
 import { findZip, listZip } from "./unzip";
 
 type Any = Record<string, any>;
@@ -182,12 +182,23 @@ function toScripts(list: unknown): RegexScript[] {
 
 function skippedOf(m: Any, other = 0): string[] {
   const out: string[] = [];
-  const n = (v: unknown) => (Array.isArray(v) ? v.length : 0);
-  if (n(m.trigger) || n(m.triggerscript)) out.push(`트리거 스크립트 ${n(m.trigger) + n(m.triggerscript)}개`);
-  if (str(m.cjs).trim()) out.push("모듈 스크립트");
-  if (str(m.backgroundEmbedding).trim() || str(m.backgroundHTML).trim()) out.push("배경 HTML");
+  if (str(m.cjs).trim()) out.push("모듈 JS 스크립트");
   if (other) out.push(`그림이 아닌 에셋(음악·영상 등) ${other}개`);
   return out;
+}
+/** RisuAI 실행 요소: 카드 확장(risuai) + 모듈(module.risum) */
+function risuExtrasOf(risu: Any, mod?: Any): RisuExtras | undefined {
+  const triggers = [...(Array.isArray(risu.triggerscript) ? risu.triggerscript : []), ...(Array.isArray(mod?.trigger) ? mod!.trigger : [])].filter((t: Any) => t && typeof t === "object" && (Array.isArray(t.effect) ? t.effect.length : 0) > 0);
+  const toggles = [str(risu.toggles), typeof mod?.customModuleToggle === "string" ? mod.customModuleToggle : ""].filter((x) => x.trim()).join("\n");
+  const bg = [str(risu.backgroundHTML), str(mod?.backgroundEmbedding)].filter((x) => x.trim()).join("\n");
+  const x: RisuExtras = {
+    ...(toggles ? { toggles } : {}),
+    ...(str(risu.defaultVariables).trim() ? { defaultVariables: str(risu.defaultVariables) } : {}),
+    ...(triggers.length ? { triggers } : {}),
+    ...(bg ? { backgroundHTML: bg } : {}),
+    ...(risu.lowLevelAccess || mod?.lowLevelAccess ? { lowLevelAccess: true } : {}),
+  };
+  return Object.keys(x).length ? x : undefined;
 }
 
 function moduleToWorld(m: Any, source: string, assetData: Uint8Array[] = []): RisuImport {
@@ -208,7 +219,7 @@ function moduleToWorld(m: Any, source: string, assetData: Uint8Array[] = []): Ri
   const lore = parts.lore.map((l) => ({ ...l, content: fillAssetLists(l.content, names, []) }));
   const scripts = toScripts(m.regex);
   // 모듈 설명은 RisuAI에서 화면 표시용이라, 상시 로어가 있으면 그것을 세계관 설명으로 쓴다
-  const world: World = { kind: "world", id, name, description: fillAssetLists(parts.body, names, []) || fix(str(m.description)), rules: fillAssetLists(parts.late, names, []), lore, ...(scripts.length ? { scripts } : {}), createdAt: now, updatedAt: now };
+  const world: World = { kind: "world", id, name, description: fillAssetLists(parts.body, names, []) || fix(str(m.description)), rules: fillAssetLists(parts.late, names, []), lore, ...(scripts.length ? { scripts } : {}), ...(risuExtrasOf({}, m) ? { risu: risuExtrasOf({}, m) } : {}), createdAt: now, updatedAt: now };
   return { source, library: [world], rooms: [], images, skipped: skippedOf(m, other) };
 }
 
@@ -268,6 +279,7 @@ function cardToCharacter(cardIn: Any, source: string, moduleLore?: { module: Any
     ...(instructions ? { instructions: fix(instructions) } : {}),
     lore: lore.map((l) => ({ ...l, content: fix(l.content) })),
     ...(scripts.length ? { scripts } : {}),
+    ...(risuExtrasOf(risu, moduleLore?.module) ? { risu: risuExtrasOf(risu, moduleLore?.module) } : {}),
     ...(risu.viewScreen === "emotion" && emoNames.length ? { emotionMode: true } : {}),
     ...(greetings.length ? { greetings } : {}), // 인사말은 등장인물에 보관 → 언제든 다른 인사말로 새 이야기
     ...(str(card.creator_notes).trim() ? { notes: str(card.creator_notes).trim() } : {}),
@@ -405,7 +417,7 @@ async function parseRisuBytes(name: string, b: Uint8Array): Promise<RisuImport> 
 export function greetingRoom(g: RisuGreeting, index = 0): Room {
   const now = Date.now();
   const text = g.greetings[index] ?? g.greetings[0] ?? "";
-  return { id: uid("r"), title: `${g.name}와(과)의 이야기`, premise: "", memory: "", messages: text ? [{ id: uid("m"), role: "assistant", text, createdAt: now }] : [], createdAt: now, updatedAt: now, characterIds: [g.characterId] };
+  return { id: uid("r"), title: `${g.name}와(과)의 이야기`, premise: "", memory: "", messages: text ? [{ id: uid("m"), role: "assistant", text, greeting: true, createdAt: now }] : [], createdAt: now, updatedAt: now, characterIds: [g.characterId] };
 }
 
 /* ---------------- 내보내기 (RisuAI에서 가져올 수 있는 형식) ---------------- */

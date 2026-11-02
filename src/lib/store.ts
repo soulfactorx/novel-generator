@@ -5,6 +5,7 @@ import { imagePool, imagePromptSection, runScripts, shrinkImage, sniffImage, uni
 import { uid } from "./id";
 import { libraryFromExtra, type LegacyImport } from "./importLegacy";
 import { greetingRoom, type RisuImage, type RisuImport } from "./risu";
+import { buildEnv, cbs, chatIndexOf, processContext, processMessages, type EnvInput } from "./risuRuntime";
 import { formatLore, matchLore, type LoreHit } from "./lore";
 import { buildMemoryRequest, cleanMemory, pendingForMemory } from "./memory";
 import { buildHistory, buildSystemPrompt, instructionsOf, outputTokensFor, type StoryContext } from "./prompt";
@@ -45,6 +46,7 @@ export interface AppState {
   usage: UsageData;
   sync: SyncStatus;
   images: Record<string, ImageMeta>; // 이미지 정보 (바이트는 필요할 때 IndexedDB에서)
+  globals: Record<string, string>; // RisuAI 전역 변수 (토글: toggle_키) — 이 기기에 저장
 }
 export interface SyncStatus {
   connected: boolean;
@@ -78,7 +80,7 @@ export interface NovelLive {
   startedAt: number;
 }
 
-let state: AppState = { ready: false, storageError: "", settings: DEFAULT_SETTINGS, rooms: {}, library: {}, activeRoomId: null, live: null, memoryJob: null, lastUsage: null, legacyExtra: null, view: "rooms", novels: {}, activeNovelId: null, novelLive: null, novelError: null, usage: emptyUsage(), sync: { connected: false, auto: false, encrypted: false, running: false }, images: {} };
+let state: AppState = { ready: false, storageError: "", settings: DEFAULT_SETTINGS, rooms: {}, library: {}, activeRoomId: null, live: null, memoryJob: null, lastUsage: null, legacyExtra: null, view: "rooms", novels: {}, activeNovelId: null, novelLive: null, novelError: null, usage: emptyUsage(), sync: { connected: false, auto: false, encrypted: false, running: false }, images: {}, globals: {} };
 const subs = new Set<() => void>();
 const dirty = { rooms: new Set<string>(), library: new Set<string>(), novels: new Set<string>() };
 const deleted = { rooms: new Set<string>(), library: new Set<string>(), novels: new Set<string>() };
@@ -196,7 +198,7 @@ export async function init() {
     // 동기화 이전부터 쓰던 기기: 저장된 설정이 있으면 기본값(0)보다 우선하도록 1
     settingsUpdatedAt = sm?.settingsUpdatedAt ?? (kv.settings ? 1 : 0);
     syncConfig = (kv.sync as SyncConfig) || null;
-    setState({ ready: true, settings: normalizeSettings(kv.settings), rooms: map, library: lib, activeRoomId: recent?.id ?? null, novels: nmap, activeNovelId: recentNovel?.id ?? null, view: kv.view === "novels" ? "novels" : "rooms", usage: (kv.usage as UsageData)?.days ? (kv.usage as UsageData) : emptyUsage(), legacyExtra: extra && (extra.worlds?.length || extra.characters?.length || extra.personas?.length) ? extra : null, images: imap });
+    setState({ ready: true, settings: normalizeSettings(kv.settings), rooms: map, library: lib, activeRoomId: recent?.id ?? null, novels: nmap, activeNovelId: recentNovel?.id ?? null, view: kv.view === "novels" ? "novels" : "rooms", usage: (kv.usage as UsageData)?.days ? (kv.usage as UsageData) : emptyUsage(), legacyExtra: extra && (extra.worlds?.length || extra.characters?.length || extra.personas?.length) ? extra : null, images: imap, globals: (kv.risuGlobals as Record<string, string>) ?? {} });
     setSyncStatus();
     void requestPersist();
     if (syncConfig?.auto) syncTimer = setTimeout(() => void syncNow(), 1500);
@@ -242,7 +244,7 @@ export interface NewRoom {
 }
 export function createRoom(opts: NewRoom = {}): string {
   const now = Date.now();
-  const messages: Message[] = opts.greeting?.trim() ? [{ id: uid("m"), role: "assistant", text: opts.greeting.trim(), createdAt: now }] : [];
+  const messages: Message[] = opts.greeting?.trim() ? [{ id: uid("m"), role: "assistant", text: opts.greeting.trim(), greeting: true, createdAt: now }] : [];
   const room: Room = { id: uid("r"), title: opts.title?.trim() || "새 이야기", premise: opts.premise ?? "", memory: "", messages, createdAt: now, updatedAt: now, characterIds: opts.characterIds ?? [], ...(opts.worldId ? { worldId: opts.worldId } : {}), ...(opts.personaId ? { personaId: opts.personaId } : {}) };
   putRoom(room);
   setState({ activeRoomId: room.id });
@@ -445,6 +447,54 @@ export async function deleteImages(ids: string[]) {
   await putImages([], ids).catch(() => {});
 }
 export const loadImageData = (id: string) => getImageData(id);
+/* ---------------- RisuAI 변수 · CBS ---------------- */
+/** 인사말을 뺀 대화 수 = 다음 메시지의 대화 번호 */
+const splitRest = (r: Pick<Room, "messages">) => r.messages.filter((m) => !m.greeting && !m.error).length;
+/** 이야기방의 CBS 환경 (vars를 주면 그 객체에 기록, 아니면 이야기 변수의 복사본) */
+export function envFor(room: Pick<Room, "worldId" | "personaId" | "characterIds" | "messages" | "id"> & { vars?: Record<string, string> }, o: Partial<EnvInput> = {}) {
+  return buildEnv({ ctx: contextFor(room), messages: room.messages, vars: o.vars ?? { ...(room.vars ?? {}) }, globals: state.globals, images: Object.values(state.images), seed: room.id, version: typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "", ...o });
+}
+export const cbsFor = (room: Parameters<typeof envFor>[0], o: Partial<EnvInput> = {}) => {
+  const env = envFor(room, o);
+  return (t: string) => cbs(t, env);
+};
+/** 화면 표시용 CBS 함수 (메시지마다 자기 대화 번호, 변수는 지우기만). 같은 이야기·변수·토글이면 재사용 */
+const displayCache = new WeakMap<object, { globals: object; library: object; risuOn: boolean; fns: Map<string, (t: string) => string> }>();
+export function displayCbs(room: Room, msgId: string | null): ((t: string) => string) | undefined {
+  if (!state.settings.risu.cbs) return undefined;
+  let c = displayCache.get(room);
+  if (!c || c.globals !== state.globals || c.library !== state.library || !c.risuOn) displayCache.set(room, (c = { globals: state.globals, library: state.library, risuOn: true, fns: new Map() }));
+  const key = msgId ?? "__live__";
+  let fn = c.fns.get(key);
+  if (!fn) {
+    const chatIndex = msgId === null ? splitRest(room) : chatIndexOf(room.messages, msgId);
+    fn = cbsFor(room, { chatIndex, rmVar: true, displaying: true });
+    c.fns.set(key, fn);
+  }
+  return fn;
+}
+
+/** 봇 버튼(risu-trigger) 실행 — Lua 트리거로 처리 (lua.ts) */
+export async function runRisuTrigger(roomId: string, name: string, id: string | null): Promise<void> {
+  const { runButton } = await import("./risuLua");
+  await runButton(roomId, name, id);
+}
+
+/** 전역 변수 (토글은 toggle_키) */
+export function setGlobal(key: string, value: string) {
+  setState((st) => ({ globals: { ...st.globals, [key]: value } }));
+  void putKV("risuGlobals", state.globals).catch(() => {});
+}
+/** 이야기방 채팅 변수 직접 고치기 */
+export function setRoomVar(roomId: string, key: string, value: string | null) {
+  const r = state.rooms[roomId];
+  if (!r) return;
+  const vars = { ...(r.vars ?? {}) };
+  if (value === null) delete vars[key];
+  else vars[key] = value;
+  updateRoom(roomId, { vars });
+}
+
 /** 이야기·소설에서 쓸 수 있는 이미지와 봇의 정규식 스크립트 */
 export const poolFor = (target: Pick<Room, "worldId" | "personaId" | "characterIds">): ImagePool => imagePool(contextFor(target), state.images);
 /** v0.1 에서 보관만 해 둔 세계관·캐릭터를 라이브러리로 */
@@ -506,7 +556,7 @@ export async function send(roomId: string, text: string) {
   const r = state.rooms[roomId];
   if (!r || isGenerating()) return;
   // 봇의 입력 스크립트(editinput)
-  const t = runScripts(text.trim(), poolFor(r).scripts, "editinput").text.trim();
+  const t = runScripts(text.trim(), poolFor(r).scripts, "editinput", cbsFor(r, { chatIndex: splitRest(r) })).text.trim();
   const msg: Message = { id: uid("m"), role: "user", text: t, createdAt: Date.now() };
   const title = r.messages.length === 0 && r.title === "새 이야기" && t ? t.slice(0, 24) + (t.length > 24 ? "…" : "") : r.title;
   updateRoom(roomId, { messages: t ? [...r.messages, msg] : r.messages, title });
@@ -535,13 +585,18 @@ async function runGeneration(roomId: string, note = "") {
   const room = state.rooms[roomId];
   const s = state.settings;
   if (!room) return;
-  const ctx = contextFor(room);
-  const pool = imagePool(ctx, state.images);
+  const ctx0 = contextFor(room);
+  const pool = imagePool(ctx0, state.images);
+  // RisuAI CBS: 토글·변수에 따라 설정 글과 대화 기록을 정리 ({{setvar}} 등은 기록하지 않고 지움)
+  const useCbs = s.risu.cbs;
+  const ctx = useCbs ? processContext(ctx0, envFor(room, { rmVar: true })) : ctx0;
+  const roomP = useCbs ? processMessages(room, (chatIndex) => envFor(room, { chatIndex, rmVar: true })) : room;
+  const procCbs = useCbs ? cbsFor(room, { rmVar: true }) : undefined;
   // 봇의 프롬프트 스크립트(editprocess): AI에게 보내는 대화만 바꾸고 저장된 대화는 그대로
-  const history = buildHistory(room, s.contextMessages).map((h) => ({ ...h, content: runScripts(h.content, pool.scripts, "editprocess").text }));
+  const history = buildHistory(roomP, s.contextMessages).map((h) => ({ ...h, content: runScripts(h.content, pool.scripts, "editprocess", procCbs).text }));
   if (!history.length) history.push({ role: "user", content: "이야기를 시작해 주세요." });
   // 로어북은 시스템 프롬프트가 아니라 마지막 입력에 붙인다 → 앞부분이 고정돼 프롬프트 캐시가 유지됨
-  const lore = loreFor(room, ctx);
+  const lore = loreFor(roomP, ctx);
   if (lore.length) {
     const last = history[history.length - 1];
     history[history.length - 1] = { ...last, content: `${last.content}\n\n<참고 설정: 이번 장면과 관련된 자료. 필요한 만큼만 자연스럽게 반영하고 그대로 옮겨 쓰지 말 것>\n${formatLore(lore)}\n</참고 설정>` };
@@ -580,12 +635,15 @@ async function runGeneration(roomId: string, note = "") {
       },
       { onRestart: () => ((streamed = ""), live({ text: "", thinking: "" })) },
     );
-    const out = runScripts(res.text, pool.scripts, "editoutput").text; // 봇의 출력 스크립트
+    // 봇의 출력 스크립트 + CBS({{setvar}} 등을 실제로 기록하고 글에서는 지움)
+    const vars = { ...(state.rooms[roomId]?.vars ?? {}) };
+    const outCbs = useCbs ? cbsFor(state.rooms[roomId] ?? room, { runVar: true, vars, chatIndex: splitRest(state.rooms[roomId] ?? room) }) : undefined;
+    const out = runScripts(res.text, pool.scripts, "editoutput", outCbs).text;
     const { text, choices } = s.choices ? splitChoices(out) : { text: out.trim(), choices: [] };
     if (!text) throw new ProviderError("AI가 빈 응답을 보냈습니다. 다시 시도해 주세요.", 0, "server");
     const cur = state.rooms[roomId];
     const reply: Message = { id: uid("m"), role: "assistant", text, ...(choices.length ? { choices } : {}), ...(res.thinking ? { thinking: res.thinking } : {}), model: res.model, ...(res.cost ? { usage: res.cost } : {}), ...(res.usedFallback ? { fallback: true } : {}), createdAt: Date.now() };
-    if (cur) updateRoom(roomId, { messages: [...cur.messages, reply] });
+    if (cur) updateRoom(roomId, { messages: [...cur.messages, reply], ...(useCbs ? { vars } : {}) });
     ok = true;
   } catch (e) {
     const err = e as Error;
@@ -771,7 +829,9 @@ export async function writeEpisode(novelId: string, index: number, note = "", un
   };
   try {
     const s = state.settings;
-    const ctx = contextFor(n);
+    const ctx0 = contextFor(n);
+    // RisuAI CBS: 소설은 이야기 변수가 없으므로 기본 변수·전역 변수(토글)로 설정 글을 정리
+    const ctx = s.risu.cbs ? processContext(ctx0, buildEnv({ ctx: ctx0, globals: state.globals, images: Object.values(state.images), rmVar: true, seed: n.id })) : ctx0;
     const groups = [...(ctx.world ? [{ source: ctx.world.name, entries: ctx.world.lore }] : []), ...ctx.characters.map((c) => ({ source: c.name, entries: c.lore }))];
     const scan = [n.outline[index].title, n.outline[index].summary, n.episodes[index - 1]?.text.slice(-1500) ?? ""].join("\n");
     const lore = groups.length ? formatLore(matchLore(groups, scan)) : "";

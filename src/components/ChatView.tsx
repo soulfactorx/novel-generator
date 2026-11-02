@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { downloadBlob, roomToTxt, safeFileName } from "../lib/exporters";
-import { branchRoom, contextFor, deleteMessage, diagnoseRoom, dismissMemoryError, editMessage, novelFromRoom, regenerate, rewindTo, selectRoom, send, setBookmark, stopGeneration, updateRoom, useApp } from "../lib/store";
+import { branchRoom, contextFor, displayCbs, runRisuTrigger, deleteMessage, diagnoseRoom, dismissMemoryError, editMessage, novelFromRoom, regenerate, rewindTo, selectRoom, send, setBookmark, stopGeneration, updateRoom, useApp } from "../lib/store";
 import DiagnosisDialog from "./DiagnosisDialog";
 import Dialog from "./Dialog";
 import { PROVIDER_LABEL } from "../lib/providers/catalog";
@@ -8,6 +8,8 @@ import MessageView from "./Message";
 import RisuText from "./RisuText";
 import { imagePool } from "../lib/images";
 import RoomDialog from "./RoomDialog";
+import TogglePanel from "./TogglePanel";
+import { togglesOf } from "../lib/risuRuntime";
 
 export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewStory }: { onMenu: () => void; onOpenSettings: (tab?: string) => void; onOpenLibrary: () => void; onNewStory: () => void }) {
   const room = useApp((s) => (s.activeRoomId ? s.rooms[s.activeRoomId] : null));
@@ -15,6 +17,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
   const settings = useApp((s) => s.settings);
   const [input, setInput] = useState("");
   const [roomDialog, setRoomDialog] = useState<null | "cast" | "memory">(null);
+  const [toggleOpen, setToggleOpen] = useState(false);
   const [diagnosis, setDiagnosis] = useState(false);
   const [bookmarks, setBookmarks] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -59,6 +62,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
       <Header onMenu={onMenu} title={room.title} onTitle={(t) => updateRoom(room.id, { title: t })} right={
         <>
           <button className="btn-ghost max-w-40 px-2 text-xs" onClick={() => setRoomDialog("cast")} title="이야기 설정">📝 <span className="truncate">{ctx.world ? ctx.world.name : "설정"}{ctx.characters.length ? ` · ${ctx.characters.length}명` : ""}</span></button>
+          {togglesOf(ctx).length > 0 && <button className="btn-ghost px-2 text-xs" onClick={() => setToggleOpen(true)} title="봇 설정 (RisuAI 토글)">🎛</button>}
           <button className="btn-ghost px-2 text-xs" onClick={() => setRoomDialog("memory")} title="장기 기억">🧠{myMemory && !myMemory.error ? "…" : ""}</button>
           <MoreMenu items={[
             ["📄 대화를 TXT로 내보내기", () => downloadBlob(`${safeFileName(room.title)}.txt`, roomToTxt(room, { user: ctx.persona?.name }), "text/plain;charset=utf-8")],
@@ -88,6 +92,8 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
               key={m.id}
               m={m}
               pool={pool}
+              cbs={displayCbs(room, m.id)}
+              onTrigger={(name, id) => void runRisuTrigger(room.id, name, id)}
               onDelete={() => deleteMessage(room.id, m.id)}
               onEdit={(t) => editMessage(room.id, m.id, t)}
               onRetry={m === last ? () => void regenerate(room.id) : undefined}
@@ -108,7 +114,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
               </div>
               {myLive.lore.length > 0 && <div className="text-xs text-stone-500" title={myLive.lore.map((h) => h.entry.title).join(", ")}>📖 참고한 로어: {myLive.lore.map((h) => h.entry.title || h.matched).join(", ")}</div>}
               {!myLive.text && myLive.thinking && <div className="line-clamp-3 text-xs italic text-stone-500">{myLive.thinking.slice(-300)}</div>}
-              {myLive.text && <RisuText text={myLive.text} pool={pool} />}
+              {myLive.text && <RisuText text={myLive.text} pool={pool} cbs={displayCbs(room, null)} />}
             </div>
           )}
           {!busy && last?.role === "assistant" && !last.error && (
@@ -197,6 +203,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
           )}
         </Dialog>
       )}
+      {toggleOpen && <Dialog title="🎛 봇 설정 (토글)" onClose={() => setToggleOpen(false)}><TogglePanel groups={togglesOf(ctx)} /></Dialog>}
       {roomDialog && <RoomDialog room={room} initialTab={roomDialog} onClose={() => setRoomDialog(null)} onOpenLibrary={() => { setRoomDialog(null); onOpenLibrary(); }} />}
     </div>
   );

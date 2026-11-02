@@ -98,7 +98,7 @@ describe("RisuAI 가져오기", () => {
     expect(w.kind).toBe("world");
     expect(w.description).toBe("### 비\n상시"); // 상시 로어는 설명으로 (모듈 설명은 화면 표시용)
     expect(w.lore.map((e) => [e.title, e.keys, !!e.always])).toEqual([["등불", ["등불", "마력등"], false]]);
-    expect(r.skipped).toEqual(["트리거 스크립트 2개"]); // 내용 없는 정규식 스크립트는 버림
+    expect(r.skipped).toEqual([]); // 트리거는 이제 가져옴 (내용 없는 트리거·정규식은 버림)
     expect(w.scripts).toBeUndefined();
   });
 
@@ -110,7 +110,7 @@ describe("RisuAI 가져오기", () => {
     expect(c.speech).toBe('서율: "규정은 규정입니다."');
     expect(c.lore.map((e) => [e.title, e.content, e.enabled, !!e.always])).toEqual([["조합", "항구의 마법 조합", true, false], ["re", "정규식 로어", false, false]]);
     expect(r.greeting?.greetings).toEqual(["*서율가 서류를 내려놓는다.* 늦었군요, 주인공.", "서율: 또 만났네요."]);
-    expect(r.skipped).toEqual(["트리거 스크립트 1개"]); // system_prompt가 {{original}}뿐이면 바꾸는 것이 없음
+    expect(r.skipped).toEqual([]); // system_prompt가 {{original}}뿐이면 바꾸는 것이 없음
     expect(r.images).toEqual([]);
     const room = greetingRoom(r.greeting!, 1);
     expect(room.characterIds).toEqual([c.id]);
