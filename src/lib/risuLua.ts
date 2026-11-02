@@ -35,7 +35,7 @@ export interface LuaHost {
   personaDescription?: string;
   authorsNote?: string;
   backgroundEmbedding?: string;
-  lore?: { comment: string; content: string; key: string; alwaysActive: boolean }[];
+  lore?: { comment: string; content: string; key: string; alwaysActive: boolean; enabled?: boolean; selective?: boolean; secondkey?: string; insertorder?: number }[];
   llm?: (prompt: { role: string; content: string }[]) => Promise<string>; // lowLevelAccess 일 때만
   lowLevelAccess?: boolean;
 }
@@ -149,7 +149,8 @@ function declare(st: EngineState) {
   api("setBackgroundEmbedding", () => undefined);
   api("getCharacterLastMessage", () => [...h().chat].reverse().find((m) => m.role === "char")?.data ?? h().firstMessage ?? "");
   api("getUserLastMessage", () => [...h().chat].reverse().find((m) => m.role === "user")?.data ?? "");
-  api("getLoreBooksMain", (id: string, search: string) => (safe(id) ? JSON.stringify((h().lore ?? []).filter((l) => l.comment === search)) : undefined));
+  // 읽기 전용이라 화면 표시(editDisplay) 중에도 허용 — 로어북을 데이터 저장소로 쓰는 봇이 시작 화면을 그릴 수 있게
+  api("getLoreBooksMain", (id: string, search: string) => (safe(id) || displayIds.has(id) ? JSON.stringify((h().lore ?? []).filter((l) => l.comment === search)) : undefined));
   api("loadLoreBooksMain", async (id: string) => (safe(id) ? JSON.stringify((h().lore ?? []).filter((l) => l.alwaysActive).map((l) => ({ role: "system", data: l.content }))) : undefined));
   api("upsertLocalLoreBook", () => undefined);
   api("hash", async (_id: string, v: string) => {
