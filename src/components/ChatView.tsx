@@ -95,7 +95,9 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
         </>
       } />
       <div className="flex min-h-0 flex-1">
-      <div className={`relative flex-1 overflow-y-auto ${bgScope}`}>
+      {/* 봇 화면의 기준: 봇이 고정(fixed)한 탭·팝업과 화면 단위(vh·vw)는 이 영역 안에서만 */}
+      <div className="risu-stage relative min-w-0 flex-1">
+      <div className={`absolute inset-0 overflow-y-auto ${bgScope}`}>
         {bgSrc && <RisuBackground src={bgSrc} pool={pool} cbs={displayCbs(room, null)} scope={bgScope} />}
         {onboardPending && (
           <button className="mx-auto mt-3 flex w-[min(42rem,calc(100%-2rem))] items-center gap-2 rounded-xl border border-violet-300 bg-violet-50 px-4 py-2 text-left text-sm dark:border-violet-800 dark:bg-violet-950/40" onClick={() => setOnboardOpen(room.id)}>
@@ -180,6 +182,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
           )}
           <div ref={endRef} />
         </div>
+      </div>
       </div>
       <EmotionPanel messages={room.messages} pool={pool} cbsFor={(id) => displayCbs(room, id)} />
       </div>
