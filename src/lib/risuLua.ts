@@ -223,6 +223,9 @@ export async function runLua(code: string, mode: string, host: LuaHost, data?: u
       } else if (mode === "onButtonClick") {
         const fn = g.get("onButtonClick");
         if (typeof fn === "function") res = await fn(id, data);
+      } else if (mode === "onFormSubmit") {
+        const fn = g.get("onFormSubmit");
+        if (typeof fn === "function") res = await fn(id, data, JSON.stringify(meta));
       } else if (mode.startsWith("edit")) {
         const count = g.get("__countListeners");
         if (typeof count === "function" && (await count(mode)) > 0) {

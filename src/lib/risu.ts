@@ -12,7 +12,7 @@
 import { zip } from "./exporters";
 import { uid } from "./id";
 import { fillAssetLists } from "./images";
-import type { Character, Entity, ImageMeta, LoreEntry, Message, RegexScript, RisuExtras, Room, World } from "./types";
+import type { Character, Entity, ImageMeta, LoreEntry, Message, Onboarding, RegexScript, RisuExtras, Room, World } from "./types";
 import { findZip, listZip } from "./unzip";
 
 type Any = Record<string, any>;
@@ -163,7 +163,8 @@ export interface RisuImage {
 }
 /** 에셋 주소(embeded:// · __asset: · data: · ccdefault:)를 바이트로 읽는 함수 */
 type AssetLoader = (uri: string) => Promise<Uint8Array | null> | Uint8Array | null;
-const IMAGE_EXT = /^(png|jpe?g|webp|gif|avif|unknown|)$/i;
+/** 가져올 에셋: 그림 + 소리·영상 (글꼴·3D 모델 등은 제외) */
+const IMAGE_EXT = /^(png|jpe?g|webp|gif|avif|unknown|mp3|wav|ogg|oga|flac|m4a|aac|opus|mp4|webm|mov|m4v|ogv|)$/i;
 
 function dataUri(uri: string): Uint8Array | null {
   const m = /^data:[^,]*;base64,(.*)$/s.exec(uri);
@@ -194,6 +195,24 @@ function skippedOf(m: Any, other = 0): string[] {
   if (other) out.push(`그림이 아닌 에셋(음악·영상 등) ${other}개`);
   return out;
 }
+/** RisuAI 온보딩 정리 (RisuAI normalizeOnboarding) — 내용이 없으면 undefined */
+export function normalizeOnboarding(raw: unknown): Onboarding | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const d = raw as Any;
+  const questions = arr(d.questions).map((q) => ({
+    id: str(q.id) || uid("q"),
+    title: str(q.title),
+    description: str(q.description),
+    type: (q.type === "multiple" || q.type === "text" ? q.type : "single") as "single" | "multiple" | "text",
+    varName: str(q.varName),
+    required: q.required === true,
+    placeholder: str(q.placeholder),
+    options: arr(q.options).map((o) => ({ label: str(o.label), value: str(o.value) })),
+  }));
+  const o: Onboarding = { enabled: d.enabled === true, mode: d.mode === "html" ? "html" : "form", title: str(d.title), description: str(d.description), html: str(d.html), ...(d.floatingButton === true ? { floatingButton: true } : {}), questions };
+  return o.html.trim() || questions.length ? o : undefined;
+}
+
 /** RisuAI 실행 요소: 카드 확장(risuai) + 모듈(module.risum) */
 function risuExtrasOf(risu: Any, mod?: Any): RisuExtras | undefined {
   const triggers = [...(Array.isArray(risu.triggerscript) ? risu.triggerscript : []), ...(Array.isArray(mod?.trigger) ? mod!.trigger : [])].filter((t: Any) => t && typeof t === "object" && (Array.isArray(t.effect) ? t.effect.length : 0) > 0);
@@ -205,6 +224,8 @@ function risuExtrasOf(risu: Any, mod?: Any): RisuExtras | undefined {
     ...(triggers.length ? { triggers } : {}),
     ...(bg ? { backgroundHTML: bg } : {}),
     ...(risu.lowLevelAccess || mod?.lowLevelAccess ? { lowLevelAccess: true } : {}),
+    ...(normalizeOnboarding(risu.onboarding) ? { onboarding: normalizeOnboarding(risu.onboarding) } : {}),
+    ...(risu.viewScreen === "emotion" && !risu.inlayViewScreen ? { emotionPanel: true } : {}),
   };
   return Object.keys(x).length ? x : undefined;
 }
@@ -477,7 +498,14 @@ export function characterToCard(c: Character, world?: World, images: ExportImage
       creator_notes: c.notes ?? "", ...(c.notesByLang && Object.keys(c.notesByLang).length ? { creator_notes_multilingual: c.notesByLang } : {}), system_prompt: "", post_history_instructions: c.instructions ?? "", alternate_greetings: greetings.slice(1), group_only_greetings: [],
       tags: [], creator: "", character_version: "1.0", nickname: c.summary, source: [], creation_date: t, modification_date: t,
       assets: images.map(({ meta }, i) => ({ type: assetType(meta.kind), uri: `embeded://${paths[i]}`, name: meta.name, ext: extOf2(meta.mime) })),
-      extensions: { risuai: { viewScreen: c.emotionMode ? "emotion" : "none", customScripts: scripts } },
+      extensions: {
+        risuai: {
+          viewScreen: c.emotionMode || c.risu?.emotionPanel ? "emotion" : "none", ...(c.risu?.emotionPanel ? {} : c.emotionMode ? { inlayViewScreen: true } : {}), customScripts: scripts,
+          ...(c.risu?.toggles ? { toggles: c.risu.toggles } : {}), ...(c.risu?.defaultVariables ? { defaultVariables: c.risu.defaultVariables } : {}),
+          ...(c.risu?.backgroundHTML ? { backgroundHTML: c.risu.backgroundHTML } : {}), ...(c.risu?.triggers?.length ? { triggerscript: c.risu.triggers } : {}),
+          ...(c.risu?.lowLevelAccess ? { lowLevelAccess: true } : {}), ...(c.risu?.onboarding ? { onboarding: c.risu.onboarding } : {}),
+        },
+      },
       character_book: { name: c.name, entries: toCardLore(lore), extensions: {} },
     },
   };
@@ -487,8 +515,9 @@ export function characterToCard(c: Character, world?: World, images: ExportImage
 export function characterToCharx(c: Character, world?: World, images: ExportImage[] = []): Uint8Array {
   const card = characterToCard(c, world, images);
   const scripts = card.data.extensions.risuai.customScripts;
-  const module = { name: `${c.name} Module`, description: `Module for ${c.name}`, id: uid("risu"), trigger: [], regex: scripts, lorebook: toRisuLore([...c.lore, ...(world ? world.lore : [])].filter((e) => e.enabled)) };
-  const cardOut = { ...card, data: { ...card.data, extensions: { risuai: { viewScreen: card.data.extensions.risuai.viewScreen } } } }; // 스크립트는 module.risum 쪽에만
+  const module = { name: `${c.name} Module`, description: `Module for ${c.name}`, id: uid("risu"), trigger: (card.data.extensions.risuai as { triggerscript?: unknown[] }).triggerscript ?? [], regex: scripts, lorebook: toRisuLore([...c.lore, ...(world ? world.lore : [])].filter((e) => e.enabled)) };
+  const { customScripts: _cs, triggerscript: trig, ...risuRest } = card.data.extensions.risuai as Record<string, unknown>;
+  const cardOut = { ...card, data: { ...card.data, extensions: { risuai: risuRest } } }; // 정규식·트리거는 RisuAI처럼 module.risum 쪽에만
   const paths = assetPaths(images);
   return zip([
     ...images.map((im, i) => ({ name: paths[i], data: im.bytes })),

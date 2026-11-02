@@ -16,7 +16,7 @@ export interface MessageActions {
   onRewind?: () => void;
 }
 
-export default function MessageView({ m, pool, cbs, onTrigger, luaDisplay, onDelete, onEdit, onRetry, onBookmark, onBranch, onRewind }: { m: Message; pool?: ImagePool; cbs?: (s: string) => string; onTrigger?: (name: string, id: string | null) => void; luaDisplay?: (t: string) => Promise<string> } & MessageActions) {
+export default function MessageView({ m, pool, cbs, onTrigger, luaDisplay, onDelete, onEdit, onRetry, onBookmark, onBranch, onRewind }: { m: Message; pool?: ImagePool; cbs?: (s: string) => string; onTrigger?: (name: string, id: string | null, meta?: object) => void; luaDisplay?: (t: string) => Promise<string> } & MessageActions) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(m.text);
   const [showThink, setShowThink] = useState(false);

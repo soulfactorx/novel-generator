@@ -148,13 +148,13 @@ describe("RisuAI 가져오기", () => {
     const r = await parseRisuFile("서율.charx", z);
     const c = r.library[0] as Character;
     expect(r.source).toBe("캐릭터 카드(charx)");
-    expect(c.lore.map((e) => e.content)).toEqual(['그림 목록: ["항구","없음"]']);
+    expect(c.lore.map((e) => e.content)).toEqual(['그림 목록: ["항구","bgm","없음"]']);
     expect(c.scripts?.map((x) => x.type)).toEqual(["editoutput", "editdisplay"]);
     expect(c.emotionMode).toBe(true);
-    expect(r.images.map((x) => [x.name, x.kind, x.ownerId === c.id])).toEqual([["main", "icon", true], ["항구", "asset", true], ["기쁨", "emotion", true], ["없음", "asset", true]]);
+    expect(r.images.map((x) => [x.name, x.kind, x.ownerId === c.id])).toEqual([["main", "icon", true], ["항구", "asset", true], ["기쁨", "emotion", true], ["bgm", "asset", true], ["없음", "asset", true]]);
     expect(await r.images[1].load()).toEqual(PNG);
-    expect(await r.images[3].load()).toBeNull(); // charx 안에 없는 파일
-    expect(r.skipped).toContain("그림이 아닌 에셋(음악·영상 등) 1개");
+    expect(await r.images[4].load()).toBeNull(); // charx 안에 없는 파일
+    expect(r.skipped.join()).not.toContain("음악");
     const jpeg = concat(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 9, 9, 9, 0xff, 0xd9]), z);
     expect((await parseRisuFile("서율.jpeg", jpeg)).library[0].name).toBe("서율");
     const noCard = await deflateZip([{ name: "x.txt", data: enc("x") }]);
@@ -165,7 +165,7 @@ describe("RisuAI 가져오기", () => {
     const b = writeRisum({ name: "항구 모듈", assets: [["밤바다", "", "png"], ["노래", "", "mp3"]], lorebook: [] });
     const withAssets = concat(b.subarray(0, b.length - 1), new Uint8Array([1, PNG.length, 0, 0, 0]), rpackEncode(PNG), new Uint8Array([1, 1, 0, 0, 0, 5, 0]));
     const r = await parseRisuFile("항구.risum", withAssets);
-    expect(r.images.map((x) => [x.name, x.kind])).toEqual([["밤바다", "asset"]]);
+    expect(r.images.map((x) => [x.name, x.kind])).toEqual([["밤바다", "asset"], ["노래", "asset"]]);
     expect(await r.images[0].load()).toEqual(PNG);
     const png = pngWith(["ccv3", { spec: "chara_card_v3", data: { name: "P", description: "d" } }]);
     const p = await parseRisuFile("p.png", png);

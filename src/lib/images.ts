@@ -14,6 +14,7 @@ export interface ImagePool {
   emotions: ImageMeta[]; // 감정 이미지
   scripts: RegexScript[];
   emotionMode: boolean; // <Emotion="…"> 로 감정 이미지를 고르게 함
+  emotionPanel: boolean; // 감정 이미지를 본문 대신 옆 패널에 (RisuAI 기본 감정 화면)
 }
 const poolCache = new WeakMap<object, Map<string, ImagePool>>();
 /** 같은 이미지 목록·같은 인물(수정 시각 포함)이면 같은 객체를 돌려준다 (화면 다시 그리기 최소화) */
@@ -37,6 +38,7 @@ function buildPool(owners: (StoryContext["characters"][number] | NonNullable<Sto
     emotions: mine.filter((m) => m.kind === "emotion"),
     scripts: owners.flatMap((o) => o.scripts ?? []),
     emotionMode: ctx.characters.some((c) => c.emotionMode && all.some((m) => m.ownerId === c.id && m.kind === "emotion")),
+    emotionPanel: ctx.characters.some((c) => c.risu?.emotionPanel && all.some((m) => m.ownerId === c.id && m.kind === "emotion")),
   };
 }
 export const poolIsEmpty = (p: ImagePool) => !p.assets.length && !p.emotions.length && !p.scripts.length;
@@ -176,20 +178,50 @@ export const hasMarkup = (s: string) => /<[a-z!/]/i.test(s) || /nvimg:[a-z0-9]/i
  * 표시용 변환: editdisplay 스크립트 → <Emotion> → 에셋 표시를 <img src="nvimg:ID"> 로.
  * 반환 html은 아직 안전 처리 전이며 그림 주소는 토큰 상태.
  */
-export function renderRisu(text: string, pool: ImagePool, cbs?: (s: string) => string): { html: string; ids: string[]; emotion?: string } {
+/**
+ * mode "back": 배경 HTML용 ({{bg::}}가 화면 배경 그림이 됨). 반환 emotions: 본문에 나온 감정 이미지 이름(옆 패널용)
+ */
+export function renderRisu(text: string, pool: ImagePool, cbs?: (s: string) => string, mode: "normal" | "back" = "normal"): { html: string; ids: string[]; emotion?: string; emotions: string[] } {
   const ids = new Set<string>();
+  const emotions: string[] = [];
   const r = runScripts(text, pool.scripts, "editdisplay", cbs);
   let html = r.text.replace(EMOTION_TAG, (_, n: string) => `{{emotion::${n}}}`);
   if (r.emotion) html = `{{emotion::${r.emotion}}}\n${html}`;
   html = html.replace(ASSET_TAG, (_, type: string, name: string) => {
     const hit = type === "emotion" ? findAsset(name, pool.emotions, false) ?? findAsset(name, pool.assets, false) : findAsset(name, pool.assets) ?? findAsset(name, pool.emotions, false);
     if (!hit) return "";
+    if (type === "emotion" && pool.emotionPanel) {
+      emotions.push(hit.name); // 옆 패널에 보여 주고 본문에서는 뺌
+      ids.add(hit.id);
+      return "";
+    }
     ids.add(hit.id);
     const src = imgToken(hit.id);
-    if (type === "raw" || type === "path") return src;
-    if (type === "img" || type === "emotion" || type === "asset") return `<img src="${src}" alt="${esc(hit.name)}" class="risu-img">\n`;
-    if (type === "image") return `<div class="risu-inlay"><img src="${src}" alt="${esc(hit.name)}"></div>\n`;
-    return ""; // 영상·음악·배경은 쓰지 않음
+    const video = isVideo(hit);
+    const audio = isAudio(hit);
+    switch (type) {
+      case "raw":
+      case "path":
+        return src;
+      case "img":
+      case "emotion":
+        return video ? `<video src="${src}" autoplay muted loop playsinline class="risu-img"></video>\n` : `<img src="${src}" alt="${esc(hit.name)}" class="risu-img">\n`;
+      case "asset":
+        return video ? `<video src="${src}" autoplay muted loop playsinline class="risu-img"></video>\n` : audio ? `<audio src="${src}" controls></audio>\n` : `<img src="${src}" alt="${esc(hit.name)}" class="risu-img">\n`;
+      case "image":
+        return `<div class="risu-inlay"><img src="${src}" alt="${esc(hit.name)}"></div>\n`;
+      case "video":
+        return `<video src="${src}" controls autoplay loop playsinline class="risu-img"></video>\n`;
+      case "video-img":
+        return `<video src="${src}" autoplay muted loop playsinline class="risu-img"></video>\n`;
+      case "audio":
+        return `<audio src="${src}" controls autoplay loop></audio>\n`;
+      case "bgm":
+        return `<div risu-ctrl="bgm___auto___${src}" style="display:none"></div>\n`; // 화면이 배경 음악으로 재생
+      case "bg":
+        return mode === "back" ? `<div class="risu-bgimg" style="background-image:linear-gradient(rgba(0,0,0,.25),rgba(0,0,0,.25)),url(${src})"></div>` : "";
+    }
+    return "";
   });
   // <img src="에셋이름"> · <img="에셋이름">: 주소가 아니라 이름이면 에셋으로 (봇 스크립트가 없어도 그림이 나오게)
   const byName = (name: string) => {
@@ -207,13 +239,15 @@ export function renderRisu(text: string, pool: ImagePool, cbs?: (s: string) => s
       const hit = byName(src);
       return hit ? `${pre}${q}${imgToken(hit.id)}${q}` : m;
     });
-  return { html, ids: [...ids], emotion: r.emotion };
+  return { html, ids: [...ids], emotion: r.emotion, emotions };
 }
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /* ---------------- 안전한 HTML (스크립트·외부 주소 제거) ---------------- */
-const TAGS = new Set("div span p br b i u s strong em small big sub sup mark hr blockquote ul ol li h1 h2 h3 h4 h5 h6 table thead tbody tfoot tr td th caption img details summary font center pre code ruby rt rp q cite abbr del ins figure figcaption button section article header footer nav aside main label".split(" "));
-const DROP = new Set(["script", "iframe", "object", "embed", "link", "meta", "base", "form", "input", "textarea", "select", "svg", "math", "template", "audio", "video", "source", "noscript", "title"]);
+const TAGS = new Set("div span p br b i u s strong em small big sub sup mark hr blockquote ul ol li h1 h2 h3 h4 h5 h6 table thead tbody tfoot tr td th caption img details summary font center pre code ruby rt rp q cite abbr del ins figure figcaption button section article header footer nav aside main label form input select option optgroup textarea fieldset legend audio video source progress meter dl dt dd kbd var samp time".split(" "));
+const DROP = new Set(["script", "iframe", "object", "embed", "link", "meta", "base", "svg", "math", "template", "noscript", "title", "frame", "frameset", "applet", "portal"]);
+const ATTRS = new Set(["alt", "title", "colspan", "rowspan", "open", "align", "color", "size", "width", "height", "class", "role", "tabindex", "risu-trigger", "risu-btn", "risu-id", "risu-form", "risu-ctrl", "risu-mark", "risu-change-var-name", "risu-change-var-value", "type", "name", "value", "placeholder", "checked", "selected", "disabled", "readonly", "min", "max", "step", "multiple", "rows", "cols", "for", "id", "maxlength", "minlength", "required", "label", "controls", "loop", "muted", "autoplay", "playsinline", "preload", "poster", "loading", "decoding", "datetime", "dir", "lang", "start", "reversed"]);
+const isAria = (n: string) => n.startsWith("aria-") || n.startsWith("data-");
 // 그림 주소: 이 앱이 만든 blob 주소, data 그림(svg 포함 — 그림으로 그릴 때는 스크립트가 실행되지 않음)
 const safeUrl = (u: string) => /^(blob:|data:image\/(png|jpe?g|gif|webp|avif|svg\+xml)[;,])/i.test(u.trim());
 /** 봇 CSS의 @import 중 글꼴(Google Fonts)만 허용 */
@@ -329,7 +363,8 @@ export function sanitizeHtml(html: string, urls: Record<string, string>, scope?:
       }
       for (const a of [...el.attributes]) {
         const n = a.name.toLowerCase();
-        const keep = n === "style" ? safeStyle(a.value) : tag === "img" && n === "src" ? (safeUrl(a.value) ? a.value : "") : ["alt", "title", "colspan", "rowspan", "open", "align", "color", "size", "width", "height", "class", "role", "aria-label", "risu-trigger", "risu-btn", "risu-id", "type"].includes(n) ? a.value : "";
+        const media = (tag === "img" || tag === "audio" || tag === "video" || tag === "source") && n === "src";
+        const keep = n === "style" ? safeStyle(a.value) : media ? (safeUrl(a.value) ? a.value : "") : n === "poster" ? (safeUrl(a.value) ? a.value : "") : (ATTRS.has(n) || isAria(n)) && !n.startsWith("on") ? a.value : "";
         if (keep) el.setAttribute(n, keep);
         else el.removeAttribute(a.name);
       }
@@ -430,9 +465,31 @@ export function sniffImage(b: Uint8Array): string | null {
   if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
   if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return "image/gif";
   if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return "image/webp";
-  if (b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) return "image/avif";
+  if (b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70 && /^avi[fs]/.test(String.fromCharCode(...b.subarray(8, 12)))) return "image/avif";
   return null;
 }
+/** 그림·소리·영상 판별 (ext: 파일 확장자 힌트) */
+export function sniffMedia(b: Uint8Array, ext = ""): string | null {
+  const img = sniffImage(b);
+  if (img && img !== "image/avif") return img;
+  const s = (o: number, n: number) => String.fromCharCode(...b.subarray(o, o + n));
+  if (s(0, 3) === "ID3" || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0 && ext !== "aac")) return "audio/mpeg";
+  if (s(0, 4) === "OggS") return /ogv/i.test(ext) ? "video/ogg" : "audio/ogg";
+  if (s(0, 4) === "RIFF" && s(8, 4) === "WAVE") return "audio/wav";
+  if (s(0, 4) === "fLaC") return "audio/flac";
+  if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return /weba/i.test(ext) ? "audio/webm" : "video/webm";
+  if (s(4, 4) === "ftyp") {
+    const brand = s(8, 4);
+    if (/^avi[fs]/.test(brand)) return "image/avif";
+    if (/^M4A|^M4B/.test(brand) || /m4a|aac/i.test(ext)) return "audio/mp4";
+    if (/^qt/.test(brand) || /mov/i.test(ext)) return "video/quicktime";
+    return "video/mp4";
+  }
+  if (b[0] === 0xff && (b[1] & 0xf6) === 0xf0) return "audio/aac";
+  return img;
+}
+export const isAudio = (m: { mime: string }) => m.mime.startsWith("audio/");
+export const isVideo = (m: { mime: string }) => m.mime.startsWith("video/");
 export const extOfMime = (mime: string) => (mime === "image/jpeg" ? "jpg" : mime.split("/")[1] || "png");
 
 /** 같은 주인 안에서 이름이 겹치지 않게 */

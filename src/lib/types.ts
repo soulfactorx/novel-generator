@@ -77,6 +77,7 @@ export interface Room {
   branchOf?: { roomId: string; messageId: string; title: string }; // 분기해 온 원래 이야기
   lastDiagnosis?: { at: number; report: string; directive: string };
   vars?: Record<string, string>; // RisuAI 채팅 변수 ({{setvar}} · Lua setChatVar)
+  onboardingDone?: boolean; // 봇의 시작 설정(온보딩)을 마침
 }
 
 /* ---------------- 라이브러리: 세계관 · 등장인물 · 주인공(페르소나) ---------------- */
@@ -160,6 +161,18 @@ export interface RisuExtras {
   triggers?: unknown[]; // RisuAI triggerscript (블록·Lua)
   backgroundHTML?: string; // 채팅 배경 HTML·CSS
   lowLevelAccess?: boolean;
+  onboarding?: Onboarding; // 채팅 시작 전 설정 화면 (답은 채팅 변수로)
+  emotionPanel?: boolean; // 감정 이미지를 본문이 아니라 옆 패널에 (RisuAI 기본 감정 화면)
+}
+/** RisuAI 온보딩: 채팅 시작 전에 보여 주는 질문(양식) 또는 HTML. 답은 채팅 변수에 기록 */
+export interface Onboarding {
+  enabled: boolean;
+  mode: "form" | "html";
+  title: string;
+  description: string;
+  html: string;
+  floatingButton?: boolean;
+  questions: { id: string; title: string; description: string; type: "single" | "multiple" | "text"; varName: string; required: boolean; placeholder: string; options: { label: string; value: string }[] }[];
 }
 
 /** 가져온 패키지: 어디서 왔는지 (같은 봇을 다시 가져올 때 교체할 수 있게) */

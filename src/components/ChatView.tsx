@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { downloadBlob, roomToTxt, safeFileName } from "../lib/exporters";
-import { branchRoom, contextFor, displayCbs, displayLua, runRisuTrigger, deleteMessage, diagnoseRoom, dismissMemoryError, editMessage, novelFromRoom, regenerate, rewindTo, selectRoom, send, setBookmark, stopGeneration, updateRoom, useApp } from "../lib/store";
+import { branchRoom, contextFor, displayCbs, displayLua, onboardingFor, runRisuTrigger, deleteMessage, diagnoseRoom, dismissMemoryError, editMessage, novelFromRoom, regenerate, rewindTo, selectRoom, send, setBookmark, stopGeneration, updateRoom, useApp } from "../lib/store";
 import DiagnosisDialog from "./DiagnosisDialog";
 import Dialog from "./Dialog";
 import { PROVIDER_LABEL } from "../lib/providers/catalog";
 import MessageView from "./Message";
 import RisuText from "./RisuText";
-import { imagePool, sanitizeHtml } from "../lib/images";
+import { imagePool } from "../lib/images";
+import { BgmButton, EmotionPanel, RisuBackground } from "./RisuStage";
+import { stopBgm } from "../lib/bgm";
 import RoomDialog from "./RoomDialog";
 import TogglePanel from "./TogglePanel";
+import OnboardingModal from "./OnboardingModal";
 import { togglesOf } from "../lib/risuRuntime";
 
 export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewStory }: { onMenu: () => void; onOpenSettings: (tab?: string) => void; onOpenLibrary: () => void; onNewStory: () => void }) {
@@ -18,6 +21,8 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
   const [input, setInput] = useState("");
   const [roomDialog, setRoomDialog] = useState<null | "cast" | "memory">(null);
   const [toggleOpen, setToggleOpen] = useState(false);
+  const [onboardOpen, setOnboardOpen] = useState<string | null>(null); // 열린 이야기 id
+  const autoOpened = useRef(new Set<string>());
   const [diagnosis, setDiagnosis] = useState(false);
   const [bookmarks, setBookmarks] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -33,6 +38,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
   const hasKey = settings.provider === "openai" ? !!settings.keys.openai || /localhost|127\.0\.0\.1/.test(settings.openaiBaseUrl) : !!settings.keys[settings.provider];
 
   useEffect(() => endRef.current?.scrollIntoView?.({ block: "end" }), [room?.messages.length, myLive?.text]);
+  useEffect(() => () => stopBgm(), [room?.id]); // 다른 이야기로 가면 배경 음악 멈춤
 
   if (!room)
     return (
@@ -52,10 +58,16 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
   const last = room.messages[room.messages.length - 1];
   const ctx = contextFor(room, lib);
   const pool = imagePool(ctx, images, settings.risu.scripts);
+  // 봇의 시작 설정(온보딩): 아직 안 했으면 새 이야기에서 한 번 자동으로 열고, 위에 알림
+  const onboarding = settings.risu.cbs ? onboardingFor(room) : null;
+  const onboardPending = !!onboarding && !room.onboardingDone;
+  if (onboardPending && !autoOpened.current.has(room.id) && !room.messages.some((m) => m.role === "user")) {
+    autoOpened.current.add(room.id);
+    queueMicrotask(() => setOnboardOpen(room.id));
+  }
   // 봇의 배경 HTML·CSS (RisuAI backgroundHTML): 이 이야기 화면 안에서만 적용
   const bgScope = `rsbg${room.id.replace(/[^a-z0-9]/gi, "")}`;
   const bgSrc = settings.risu.background ? [...ctx.characters, ...(ctx.world ? [ctx.world] : [])].map((o) => o.risu?.backgroundHTML ?? "").filter((x) => x.trim()).join("\n") : "";
-  const bgHtml = bgSrc ? sanitizeHtml(displayCbs(room, null)?.(bgSrc) ?? bgSrc, {}, bgScope) : "";
   const myMemory = memoryJob?.roomId === room.id ? memoryJob : null;
   const submit = (text: string) => {
     if (busy || (!text.trim() && room.messages.length > 0)) return;
@@ -68,6 +80,8 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
       <Header onMenu={onMenu} title={room.title} onTitle={(t) => updateRoom(room.id, { title: t })} right={
         <>
           <button className="btn-ghost max-w-40 px-2 text-xs" onClick={() => setRoomDialog("cast")} title="이야기 설정">📝 <span className="truncate">{ctx.world ? ctx.world.name : "설정"}{ctx.characters.length ? ` · ${ctx.characters.length}명` : ""}</span></button>
+          <BgmButton />
+          {onboarding && <button className="btn-ghost px-2 text-xs" onClick={() => setOnboardOpen(room.id)} title="봇 시작 설정 (온보딩)">🧭</button>}
           {togglesOf(ctx).length > 0 && <button className="btn-ghost px-2 text-xs" onClick={() => setToggleOpen(true)} title="봇 설정 (RisuAI 토글)">🎛</button>}
           <button className="btn-ghost px-2 text-xs" onClick={() => setRoomDialog("memory")} title="장기 기억">🧠{myMemory && !myMemory.error ? "…" : ""}</button>
           <MoreMenu items={[
@@ -79,8 +93,14 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
           <button className="btn-ghost hidden px-2 text-xs sm:inline-flex" onClick={() => onOpenSettings("ai")} title="AI 모델">{PROVIDER_LABEL[settings.provider]} · {settings.models[settings.provider]}</button>
         </>
       } />
+      <div className="flex min-h-0 flex-1">
       <div className={`relative flex-1 overflow-y-auto ${bgScope}`}>
-        {bgHtml && <div className="risu-bg" aria-hidden="true" dangerouslySetInnerHTML={{ __html: bgHtml }} />}
+        {bgSrc && <RisuBackground src={bgSrc} pool={pool} cbs={displayCbs(room, null)} scope={bgScope} />}
+        {onboardPending && (
+          <button className="mx-auto mt-3 flex w-[min(42rem,calc(100%-2rem))] items-center gap-2 rounded-xl border border-violet-300 bg-violet-50 px-4 py-2 text-left text-sm dark:border-violet-800 dark:bg-violet-950/40" onClick={() => setOnboardOpen(room.id)}>
+            🧭 <span><b>봇 시작 설정</b><span className="hint block">이 봇은 시작하기 전에 고를 설정이 있습니다. 눌러서 설정하세요.</span></span>
+          </button>
+        )}
         <div className="mx-auto max-w-3xl space-y-6 px-4 py-6">
           {room.branchOf && (
             <div className="text-xs text-stone-500">
@@ -101,7 +121,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
               pool={pool}
               cbs={displayCbs(room, m.id)}
               luaDisplay={displayLua(room, m.id)}
-              onTrigger={(name, id) => void runRisuTrigger(room.id, name, id)}
+              onTrigger={(name, id, meta) => void runRisuTrigger(room.id, name, id, meta)}
               onDelete={() => deleteMessage(room.id, m.id)}
               onEdit={(t) => editMessage(room.id, m.id, t)}
               onRetry={m === last ? () => void regenerate(room.id) : undefined}
@@ -160,6 +180,8 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
           <div ref={endRef} />
         </div>
       </div>
+      <EmotionPanel messages={room.messages} pool={pool} cbsFor={(id) => displayCbs(room, id)} />
+      </div>
       <div className="border-t border-stone-200 bg-stone-50/90 p-3 backdrop-blur dark:border-stone-800 dark:bg-stone-950/90">
         <div className="mx-auto flex max-w-3xl items-end gap-2">
           <textarea
@@ -211,6 +233,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
           )}
         </Dialog>
       )}
+      {onboardOpen === room.id && <OnboardingModal room={room} onClose={() => setOnboardOpen(null)} />}
       {toggleOpen && <Dialog title="🎛 봇 설정 (토글)" onClose={() => setToggleOpen(false)}><TogglePanel groups={togglesOf(ctx)} /></Dialog>}
       {roomDialog && <RoomDialog room={room} initialTab={roomDialog} onClose={() => setRoomDialog(null)} onOpenLibrary={() => { setRoomDialog(null); onOpenLibrary(); }} />}
     </div>
