@@ -45,3 +45,5 @@ body {
 .risu-bg { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
 .risu-bg ~ * { position: relative; z-index: 1; }
 .risu-bgimg { position: absolute; inset: 0; background-size: cover; background-position: center; }
+.risu-stage { contain: layout paint; container-type: size; --risu-fixed: fixed; }
+.risu-html { position: relative; }

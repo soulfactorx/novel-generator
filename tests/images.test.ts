@@ -135,14 +135,14 @@ describe("실제 RisuAI 봇 구조 (부르봉과 라이스샤워 charx 분석 �
     expect(r.ids).toEqual(["i5"]);
     expect(r.html).toContain('<img class="roundedImage" src="nvimg:i5">');
   });
-  test("상태창 <style>: 이 메시지 범위로 한정, body·@import·외부 url·fixed 제거, @media 유지", () => {
+  test("상태창 <style>: 이 메시지 범위로 한정, body·@import·외부 url 제거, fixed는 이야기 화면 안으로, @media 유지", () => {
     const css = `@import url('https://fonts.googleapis.com/x'); body { min-height:100vh; background:#707090 } .status-window, .bar:hover { background-color:#13a9b0; position: fixed; color: red } @media (max-width:600px){ .stat-item{ padding:2px } } @font-face{font-family:x;src:url(https://x)} .bg{background:url(https://evil/x.png)} @keyframes k{from{opacity:0}to{opacity:1}}`;
     const out = scopeCss(css, "rs1");
     expect(out).not.toContain("@import"); // 글꼴이 아닌 주소는 버림
     expect(out).not.toMatch(/rs1 body|min-height/);
     expect(out).toContain(".rs1 .status-window,.rs1 .bar:hover{");
     expect(out).toContain("background-color:#13a9b0");
-    expect(out).not.toContain("fixed");
+    expect(out).toContain("position: var(--risu-fixed,absolute)"); // 고정은 이야기 화면 안에서만
     expect(out).toContain("@media (max-width:600px){.rs1 .stat-item{");
     expect(out).not.toContain("font-face");
     expect(out).not.toContain("evil");

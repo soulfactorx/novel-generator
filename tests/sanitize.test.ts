@@ -20,3 +20,11 @@ test("봇 상태창: <!DOCTYPE>·<html>·<head> 벗기고, <style>은 범위 한
   expect(out).toMatch(/<\/div>뒤 문단\.$/);
   expect(sanitizeHtml("<style>.a{color:red}</style>x", {})).toBe("x"); // 범위가 없으면 스타일은 버림
 });
+
+test("봇의 고정 위치·화면 단위는 이야기 화면 기준으로", () => {
+  const out = sanitizeHtml('<div style="position:fixed;right:0;height:100dvh;width:calc(100vw - 76px);background:url(https://x/y.png)">탭</div>', {});
+  expect(out).toContain("position:var(--risu-fixed,absolute)");
+  expect(out).toContain("height:100cqh");
+  expect(out).toContain("width:calc(100cqw - 76px)");
+  expect(out).not.toContain("https://x");
+});

@@ -252,13 +252,19 @@ const isAria = (n: string) => n.startsWith("aria-") || n.startsWith("data-");
 const safeUrl = (u: string) => /^(blob:|data:image\/(png|jpe?g|gif|webp|avif|svg\+xml)[;,])/i.test(u.trim());
 /** 봇 CSS의 @import 중 글꼴(Google Fonts)만 허용 */
 const FONT_IMPORT = /^@import\s+url\(\s*['"]?(https:\/\/fonts\.googleapis\.com\/css2?\?[^'")\s]+)['"]?\s*\)\s*;?$/i;
+/**
+ * 봇 CSS 한 덩어리를 안전하게.
+ * - position:fixed → 이야기 화면(.risu-stage) 안에서만 고정 (그 밖에서는 메시지 안 absolute)
+ * - 화면 단위(vh·vw·dvh…) → 이야기 화면 크기 단위(cqh·cqw): 봇이 "화면"으로 여기는 곳이 앱 전체가 아니라 이야기 화면
+ */
 function safeStyle(css: string): string {
   if (/expression\s*\(|@import|javascript:|behavior\s*:/i.test(css)) return "";
   return css
     .split(";")
-    .filter((d) => {
-      const urls = [...d.matchAll(/url\(\s*['"]?([^'")]+)['"]?\s*\)/gi)].map((m) => m[1]);
-      return urls.every(safeUrl) && !/position\s*:\s*fixed/i.test(d);
+    .filter((d) => [...d.matchAll(/url\(\s*['"]?([^'")]+)['"]?\s*\)/gi)].map((m) => m[1]).every(safeUrl))
+    .map((d) => {
+      d = d.replace(/(position\s*:\s*)fixed\b/i, "$1var(--risu-fixed,absolute)");
+      return /url\(/i.test(d) ? d : d.replace(/(\d*\.?\d)[dsl]?v(h|w|min|max)\b/gi, (_, n: string, u: string) => `${n}cq${u.toLowerCase()}`);
     })
     .join(";");
 }
