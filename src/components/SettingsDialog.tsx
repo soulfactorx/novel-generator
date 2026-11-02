@@ -308,6 +308,9 @@ function DataTab() {
         )}
         {msg && <p className={`text-sm font-semibold ${msg.ok ? "text-emerald-600" : "text-rose-600"}`}>{msg.text}</p>}
       </div>
+      <p className="hint text-center">
+        Novel Generator · <a className="underline" href="https://github.com/soulfactorx/novel-generator" target="_blank" rel="noreferrer">소스 코드</a> · <a className="underline" href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noreferrer">AGPL-3.0</a>
+      </p>
     </div>
   );
 }

@@ -68,4 +68,8 @@ npm run build      # 타입 검사 + dist/index.html (단일 파일)
 - ~~v0.5 앱 설치(PWA)·오프라인, 소설 표지, 기기 간 동기화~~ ✅
 
 ## 라이선스
-[MIT](LICENSE)
+[GNU AGPL-3.0](LICENSE) (AGPL-3.0-or-later) · Copyright (c) 2026 soulfactorx
+
+- 이 앱을 고쳐서 다른 사람에게 배포하거나 웹으로 서비스하면, 고친 소스도 AGPL-3.0으로 공개해야 합니다. 앱의 [⚙️ 설정 → 데이터] 맨 아래에 소스 코드 링크가 있습니다.
+- v0.5.0까지 배포된 버전은 MIT 라이선스입니다.
+- RisuAI 모듈(.risum)을 읽고 쓰는 데 쓰는 RPack 변환표는 [RisuAI](https://github.com/kwaroran/RisuAI)의 Rpack.js(MIT / AGPL-3.0 이중 라이선스)에서 왔습니다.

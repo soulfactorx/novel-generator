@@ -1,9 +1,13 @@
 /**
  * RisuAI 파일 가져오기 · 내보내기
- * - 캐릭터 카드: .charx(ZIP: card.json + module.risum), .json(Character Card V1/V2/V3), .png(tEXt chara/ccv3)
+ * - 캐릭터 카드: .charx(ZIP: card.json + module.risum + assets/), .json(Character Card V1/V2/V3), .png(tEXt chara/ccv3)
  * - 모듈: .risum(RisuAI 모듈 바이너리), 모듈 JSON(type: risuModule)
  * - 로어북 JSON(type: risu / SillyTavern world info), 채팅 JSON(type: risuChat / risuAllChats)
- * 정규식 스크립트·트리거·Lua·HTML 배경·이미지 에셋은 이 앱에서 쓰지 않으므로 가져오지 않는다.
+ * 이미지 에셋·정규식 스크립트는 가져오고, 트리거·Lua·배경 HTML은 이 앱에서 쓰지 않으므로 가져오지 않는다.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ * RPack 변환표는 RisuAI(https://github.com/kwaroran/RisuAI, src/ts/rpack)의 rpack_map.bin과 같은 값이다.
+ * Rpack.js는 MIT / AGPL-3.0 이중 라이선스이며 RisuAI 밖에서 쓰는 경우 AGPL-3.0을 따르므로, 이 프로젝트도 AGPL-3.0으로 배포한다.
  */
 import { zip } from "./exporters";
 import { uid } from "./id";
