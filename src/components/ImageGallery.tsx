@@ -1,4 +1,6 @@
 import { useRef, useState } from "react";
+import { imagePool } from "../lib/images";
+import RisuText from "./RisuText";
 import { useImageUrls } from "../lib/imageUrls";
 import { addImages, deleteImages, renameImage, updateEntity, useApp } from "../lib/store";
 import type { Character, ImageMeta, RegexScript, World } from "../lib/types";
@@ -148,5 +150,33 @@ export function PackageBadge({ e }: { e: Character | World }) {
       <div className="mt-0.5 opacity-80">{parts.join(" · ")}</div>
       <div className="mt-0.5 opacity-70">모든 내용은 여기서 고쳐 쓸 수 있습니다. 같은 파일을 다시 가져오면 이 패키지를 교체할지 물어봅니다.</div>
     </div>
+  );
+}
+
+const LANG_NAME: Record<string, string> = { ko: "한국어", en: "English", ja: "日本語", zh: "中文", "zh-cn": "简体中文", "zh-tw": "繁體中文", es: "Español", fr: "Français", de: "Deutsch", ru: "Русский", vi: "Tiếng Việt", th: "ไทย", id: "Bahasa Indonesia" };
+/** 제작자 노트 (언어별 노트가 있으면 언어를 골라 보기). AI에게는 보내지 않는다 */
+export function CreatorNotes({ c }: { c: Character }) {
+  const images = useApp((s) => s.images);
+  const byLang = c.notesByLang ?? {};
+  const langs = [...(c.notes?.trim() ? ["default"] : []), ...Object.keys(byLang)];
+  const pref = (typeof navigator !== "undefined" ? navigator.language : "ko").toLowerCase();
+  const initial = langs.find((l) => l.toLowerCase() === pref) ?? langs.find((l) => pref.startsWith(l.toLowerCase().split("-")[0])) ?? langs[0];
+  const [lang, setLang] = useState(initial);
+  if (!langs.length) return null;
+  const cur = langs.includes(lang) ? lang : langs[0];
+  const text = cur === "default" ? c.notes ?? "" : byLang[cur] ?? "";
+  return (
+    <details className="rounded-lg border border-stone-200 dark:border-stone-800">
+      <summary className="cursor-pointer px-3 py-2 text-sm font-semibold">📝 제작자 노트{langs.length > 1 && <span className="hint font-normal"> · {langs.length}개 언어</span>}</summary>
+      <div className="space-y-2 border-t border-stone-200 px-3 py-2 dark:border-stone-800">
+        {langs.length > 1 && (
+          <div className="flex flex-wrap gap-1">
+            {langs.map((l) => <button key={l} className={`rounded px-2 py-0.5 text-xs ${l === cur ? "bg-violet-600 text-white" : "bg-stone-200/70 dark:bg-stone-800"}`} onClick={() => setLang(l)}>{l === "default" ? "기본" : LANG_NAME[l.toLowerCase()] ?? l}</button>)}
+          </div>
+        )}
+        <div className="max-h-96 overflow-y-auto text-sm"><RisuText text={text} pool={imagePool({ characters: [c] }, images)} /></div>
+        <p className="hint">봇 제작자가 남긴 설명입니다. AI에게는 보내지 않습니다.</p>
+      </div>
+    </details>
   );
 }

@@ -110,6 +110,8 @@ export interface Character extends EntityBase {
   scripts?: RegexScript[]; // RisuAI 캐릭터의 정규식 스크립트
   instructions?: string; // 응답 직전에 AI에게 주는 지시 (RisuAI post_history_instructions · @@depth 0 로어)
   greetings?: string[]; // 첫 메시지(인사말) 목록 — 새 이야기를 이 중 하나로 시작
+  notes?: string; // 제작자 노트 (AI에게는 보내지 않음)
+  notesByLang?: Record<string, string>; // 언어별 제작자 노트 (CCv3 creator_notes_multilingual: { ko, en, ja … })
   source?: PackageSource; // 가져온 패키지 정보 (RisuAI charx 등)
   emotionMode?: boolean; // RisuAI '감정 이미지' 화면: AI가 응답마다 <Emotion="이름">으로 감정 이미지를 고름
 }

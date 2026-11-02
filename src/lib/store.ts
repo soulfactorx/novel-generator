@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { previewText, splitChoices } from "./choices";
+import { CHOICE_MARKER, previewText, splitChoices } from "./choices";
 import { deleteKV, getImageData, loadAll, putImages, putKV, putRecords, requestPersist } from "./db";
 import { imagePool, imagePromptSection, runScripts, shrinkImage, sniffImage, uniqueName, type ImagePool } from "./images";
 import { uid } from "./id";
@@ -358,7 +358,7 @@ export function existingPackages(data: Pick<RisuImport, "library">): { incoming:
  * RisuAI 패키지 가져오기. replace: 이미 가져온 같은 패키지를 새 내용으로 교체
  * (id는 그대로 두어 그 패키지를 쓰던 이야기·소설의 연결이 유지됨, 이미지는 새 것으로 바꿈)
  */
-export async function importRisu(data: RisuImport, opts: { greeting?: number; replace?: boolean } = {}): Promise<{ room: string | null; images: number; replaced: number }> {
+export async function importRisu(data: RisuImport, opts: { greeting?: number; replace?: boolean; onProgress?: (done: number, total: number) => void } = {}): Promise<{ room: string | null; images: number; replaced: number }> {
   const idMap = new Map<string, string>();
   let replaced = 0;
   if (opts.replace)
@@ -378,7 +378,7 @@ export async function importRisu(data: RisuImport, opts: { greeting?: number; re
     };
   }
   upsertLibrary(data.library);
-  const images = await addImages(data.images);
+  const images = await addImages(data.images, opts.onProgress);
   data.rooms.forEach((r) => putRoom(r));
   let open: string | null = data.rooms[0]?.id ?? null;
   if (data.greeting && opts.greeting !== undefined) {
@@ -392,11 +392,16 @@ export async function importRisu(data: RisuImport, opts: { greeting?: number; re
 
 /* ---------------- 이미지 (RisuAI 에셋 · 감정 이미지) ---------------- */
 /** 이미지 저장. 그림이 아닌 파일은 건너뛰고, 같은 주인 안에서 이름이 겹치면 _2 … 를 붙인다. 저장한 개수를 돌려준다 */
-export async function addImages(list: Pick<RisuImage, "ownerId" | "name" | "kind" | "load">[]): Promise<number> {
+export async function addImages(list: Pick<RisuImage, "ownerId" | "name" | "kind" | "load">[], onProgress?: (done: number, total: number) => void): Promise<number> {
   const items: { meta: ImageMeta; data: Uint8Array }[] = [];
   const taken = new Map<string, string[]>();
   const namesOf = (owner: string) => taken.get(owner) ?? (taken.set(owner, Object.values(state.images).filter((m) => m.ownerId === owner).map((m) => m.name)), taken.get(owner)!);
+  let done = 0;
   for (const it of list) {
+    if (onProgress && (done++ % 10 === 0 || done === list.length)) {
+      onProgress(done, list.length);
+      await new Promise((r) => setTimeout(r, 0)); // 화면이 진행률을 그릴 틈
+    }
     let raw: Uint8Array | null = null;
     try {
       raw = await it.load();
@@ -545,7 +550,9 @@ async function runGeneration(roomId: string, note = "") {
   const instr = instructionsOf(ctx);
   if (instr) {
     const last = history[history.length - 1];
-    history[history.length - 1] = { ...last, content: `${last.content}\n\n<설정 지시: 이번 응답에서 반드시 따를 것>\n${instr}\n</설정 지시>` };
+    // 봇 지시가 '응답 맨 끝'을 요구하는 경우가 많아(상태창 등) 선택지와 순서를 정해 준다
+    const order = s.choices ? `\n\n<출력 순서: 위 설정 지시가 요구하는 출력(상태창 등)을 모두 쓴 다음, 응답의 맨 마지막에 "${CHOICE_MARKER}" 블록(번호 붙인 다음 행동 4가지)을 반드시 붙인다.>` : "";
+    history[history.length - 1] = { ...last, content: `${last.content}\n\n<설정 지시: 이번 응답에서 반드시 따를 것>\n${instr}\n</설정 지시>${order}` };
   }
   if (note.trim()) {
     const last = history[history.length - 1];

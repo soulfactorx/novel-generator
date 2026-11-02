@@ -5,7 +5,7 @@ import { createEntity, createNovel, createRoom, deleteEntity, entitiesOf, getSta
 import type { Character, Entity, EntityKind, Persona, World } from "../lib/types";
 import Dialog from "./Dialog";
 import LoreEditor from "./LoreEditor";
-import { GreetingsEditor, ImageGallery, PackageBadge, RisuSettings } from "./ImageGallery";
+import { CreatorNotes, GreetingsEditor, ImageGallery, PackageBadge, RisuSettings } from "./ImageGallery";
 
 const KINDS: [EntityKind, string, string][] = [
   ["world", "세계관", "🌍"],
@@ -55,6 +55,7 @@ export default function LibraryDialog({ initialKind = "world", onClose }: { init
             <div className="space-y-4">
               <button className="btn-ghost px-2 text-xs md:hidden" onClick={() => setSel(null)}>← 목록</button>
               {cur.kind !== "persona" && <PackageBadge e={cur} />}
+              {cur.kind === "character" && <CreatorNotes c={cur} />}
               {cur.kind === "world" && <WorldForm w={cur} />}
               {cur.kind === "character" && <CharacterForm c={cur} worlds={entitiesOf(lib, "world")} onStart={(g) => { startStory(cur, lib, g); onClose(); }} />}
               {cur.kind === "persona" && <PersonaForm p={cur} />}

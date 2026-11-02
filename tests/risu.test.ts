@@ -274,3 +274,13 @@ describe("패키지 전체 내보내기 → 다시 가져오기", () => {
     expect(b.source).toMatchObject({ kind: "risu", file: "하루.charx", format: "캐릭터 카드(charx)" });
   });
 });
+
+test("제작자 노트 · 언어별 노트(CCv3 creator_notes_multilingual) 보관과 내보내기", async () => {
+  const r = parseRisuJson({ spec: "chara_card_v3", data: { name: "N", description: "d", creator_notes: "기본 노트", creator_notes_multilingual: { ko: "한국어 노트", en: "English note", ja: "日本語ノート", fr: "" } } })!;
+  const c = r.library[0] as Character;
+  expect(c.notes).toBe("기본 노트");
+  expect(c.notesByLang).toEqual({ ko: "한국어 노트", en: "English note", ja: "日本語ノート" });
+  const back = (await parseRisuFile("n.charx", characterToCharx(c))).library[0] as Character;
+  expect(back.notes).toBe("기본 노트");
+  expect(back.notesByLang).toEqual(c.notesByLang);
+});

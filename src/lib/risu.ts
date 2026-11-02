@@ -270,6 +270,10 @@ function cardToCharacter(cardIn: Any, source: string, moduleLore?: { module: Any
     ...(scripts.length ? { scripts } : {}),
     ...(risu.viewScreen === "emotion" && emoNames.length ? { emotionMode: true } : {}),
     ...(greetings.length ? { greetings } : {}), // 인사말은 등장인물에 보관 → 언제든 다른 인사말로 새 이야기
+    ...(str(card.creator_notes).trim() ? { notes: str(card.creator_notes).trim() } : {}),
+    ...(card.creator_notes_multilingual && typeof card.creator_notes_multilingual === "object" && Object.keys(card.creator_notes_multilingual).length
+      ? { notesByLang: Object.fromEntries(Object.entries(card.creator_notes_multilingual as Record<string, unknown>).map(([k, v]) => [k, str(v)]).filter(([, v]) => v.trim())) }
+      : {}),
     createdAt: now, updatedAt: now,
   };
   const skipped = skippedOf({ ...risu, ...(moduleLore?.module || {}) }, other);
@@ -449,7 +453,7 @@ export function characterToCard(c: Character, world?: World, images: ExportImage
     spec_version: "3.0",
     data: {
       name: c.name, description, personality: "", scenario: "", first_mes: greetings[0] ?? "", mes_example: c.speech,
-      creator_notes: "Novel Generator에서 내보낸 캐릭터", system_prompt: "", post_history_instructions: c.instructions ?? "", alternate_greetings: greetings.slice(1), group_only_greetings: [],
+      creator_notes: c.notes ?? "", ...(c.notesByLang && Object.keys(c.notesByLang).length ? { creator_notes_multilingual: c.notesByLang } : {}), system_prompt: "", post_history_instructions: c.instructions ?? "", alternate_greetings: greetings.slice(1), group_only_greetings: [],
       tags: [], creator: "", character_version: "1.0", nickname: c.summary, source: [], creation_date: t, modification_date: t,
       assets: images.map(({ meta }, i) => ({ type: assetType(meta.kind), uri: `embeded://${paths[i]}`, name: meta.name, ext: extOf2(meta.mime) })),
       extensions: { risuai: { viewScreen: c.emotionMode ? "emotion" : "none", customScripts: scripts } },

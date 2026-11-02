@@ -229,12 +229,14 @@ function DataTab() {
   const [risu, setRisu] = useState<RisuImport | null>(null);
   const [greet, setGreet] = useState(-1); // -1: 이야기 만들지 않고 라이브러리에만 (인사말은 패키지에 보관)
   const [replace, setReplace] = useState(true); // 이미 가져온 같은 패키지가 있으면 교체
+  const [progress, setProgress] = useState<{ label: string; pct: number | null } | null>(null);
   const onFile = async (f: File) => {
     setMsg(null);
     setPending(null);
     setRisu(null);
     try {
-      const bytes = new Uint8Array(await f.arrayBuffer());
+      const bytes = await readWithProgress(f, (pct) => setProgress({ label: `파일 읽는 중 (${(f.size / 1048576).toFixed(1)}MB)`, pct }));
+      setProgress({ label: "내용 분석 중", pct: null });
       let j: unknown;
       if (!/\.(charx|risum|png|jpe?g)$/i.test(f.name)) {
         try {
@@ -267,6 +269,8 @@ function DataTab() {
       } else setPending(parseLegacyBackup(j));
     } catch (e) {
       setMsg({ ok: false, text: `❌ ${(e as Error).message}` });
+    } finally {
+      setProgress(null);
     }
   };
   return (
@@ -297,8 +301,10 @@ function DataTab() {
         {risu && <RisuPreview data={risu} greet={greet} setGreet={setGreet} replace={replace} setReplace={setReplace} onCancel={() => setRisu(null)} onImport={async () => {
           const data = risu;
           setRisu(null);
-          setMsg({ ok: true, text: data.images.length ? `⏳ 이미지 ${data.images.length}장을 저장하는 중…` : "⏳ 가져오는 중…" });
-          const res = await importRisu(data, { ...(greet >= 0 && data.greeting ? { greeting: greet } : {}), replace });
+          setMsg(null);
+          setProgress({ label: data.images.length ? `이미지 0 / ${data.images.length}장 저장 중` : "가져오는 중", pct: data.images.length ? 0 : null });
+          const res = await importRisu(data, { ...(greet >= 0 && data.greeting ? { greeting: greet } : {}), replace, onProgress: (d, t) => setProgress({ label: `이미지 ${d} / ${t}장 저장 중`, pct: Math.round((d / t) * 100) }) });
+          setProgress(null);
           const c = data.library.filter((e) => e.kind === "character").length, w = data.library.filter((e) => e.kind === "world").length;
           const made = data.rooms.length + (greet >= 0 && data.greeting ? 1 : 0);
           setMsg({ ok: true, text: `✅ ${[c && `등장인물 ${c}명`, w && `세계관 ${w}개`, res.images && `이미지 ${res.images}장`, made && `이야기 ${made}개`].filter(Boolean).join(", ")}을(를) ${res.replaced ? "교체했습니다(기존 패키지 업데이트)" : "가져왔습니다"}.${data.library.some((e) => e.kind !== "persona") ? " [📚 라이브러리]에서 언제든 고치고 다시 시작할 수 있습니다." : ""}` });
@@ -309,10 +315,18 @@ function DataTab() {
             <button className="btn-primary" onClick={() => setMsg({ ok: true, text: `✅ 라이브러리에 ${importLegacyExtra()}개 항목을 추가했습니다.` })}>라이브러리로 가져오기</button>
           </div>
         )}
+        {progress && (
+          <div className="space-y-1" role="progressbar" aria-valuenow={progress.pct ?? undefined} aria-label="가져오기 진행률">
+            <div className="flex justify-between text-xs text-stone-500"><span>⏳ {progress.label}</span>{progress.pct !== null && <b>{progress.pct}%</b>}</div>
+            <div className="h-2 overflow-hidden rounded-full bg-stone-200 dark:bg-stone-800">
+              <div className={`h-full rounded-full bg-violet-600 transition-all ${progress.pct === null ? "w-1/3 animate-pulse" : ""}`} style={progress.pct !== null ? { width: `${progress.pct}%` } : undefined} />
+            </div>
+          </div>
+        )}
         {msg && <p className={`text-sm font-semibold ${msg.ok ? "text-emerald-600" : "text-rose-600"}`}>{msg.text}</p>}
       </div>
       <p className="hint text-center">
-        Novel Generator · <a className="underline" href="https://github.com/soulfactorx/novel-generator" target="_blank" rel="noreferrer">소스 코드</a> · <a className="underline" href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noreferrer">AGPL-3.0</a>
+        Novel Generator v{__APP_VERSION__} · <a className="underline" href="https://github.com/soulfactorx/novel-generator" target="_blank" rel="noreferrer">소스 코드</a> · <a className="underline" href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noreferrer">AGPL-3.0</a>
       </p>
     </div>
   );
@@ -369,4 +383,17 @@ function RisuPreview({ data, greet, setGreet, replace, setReplace, onImport, onC
       </div>
     </div>
   );
+}
+
+/** 파일을 읽으며 진행률(0~100)을 알려 준다 */
+function readWithProgress(f: File, onPct: (pct: number) => void): Promise<Uint8Array> {
+  if (typeof FileReader === "undefined" || f.size < 2_000_000) return f.arrayBuffer().then((b) => new Uint8Array(b));
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onprogress = (e) => e.lengthComputable && onPct(Math.round((e.loaded / e.total) * 100));
+    r.onload = () => res(new Uint8Array(r.result as ArrayBuffer));
+    r.onerror = () => rej(r.error ?? new Error("파일을 읽지 못했습니다."));
+    onPct(0);
+    r.readAsArrayBuffer(f);
+  });
 }
