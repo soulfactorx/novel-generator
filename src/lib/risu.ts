@@ -94,7 +94,8 @@ function toLore(r: RawLore, name: string): ImportedLore | null {
   if (!content) return null;
   const keys = [...new Set(r.keys.map((k) => (r.regex ? k.trim() : fillMacros(k, name))).filter(Boolean))];
   const secondKeys = (r.secondKeys ?? []).map((k) => fillMacros(k, name)).filter(Boolean);
-  const always = r.always || !keys.length;
+  // 키 없는 항목은 RisuAI에서도 자동으로 켜지지 않는다 (봇이 Lua로 꺼내 쓰는 데이터 저장소인 경우가 많음) → 그대로 보관
+  const always = r.always;
   return {
     id: uid("l"), title: fillMacros(r.title, name) || (r.regex ? "" : keys[0]) || "", keys, content, enabled: r.enabled, ...(always ? { always: true } : {}),
     ...(r.regex ? { regex: true } : {}), ...(secondKeys.length ? { secondKeys } : {}), ...(r.order ? { order: r.order } : {}), ...(decorators ? { decorators } : {}),

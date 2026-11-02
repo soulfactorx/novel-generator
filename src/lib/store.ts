@@ -475,7 +475,12 @@ export function displayCbs(room: Room, msgId: string | null): ((t: string) => st
   let fn = c.fns.get(key);
   if (!fn) {
     const chatIndex = msgId === null ? splitRest(room) : chatIndexOf(room.messages, msgId);
-    fn = cbsFor(room, { chatIndex, rmVar: true, displaying: true });
+    const env = envFor(room, { chatIndex, rmVar: true, displaying: true });
+    // 인사말은 RisuAI에서 firstmsg(역할 char), 생성 중인 응답도 char
+    const msg = msgId === null ? null : room.messages.find((m) => m.id === msgId);
+    if (msg?.greeting) env.firstMsg = true;
+    else if (msgId === null) env.role = "char";
+    fn = (t: string) => cbs(t, env);
     c.fns.set(key, fn);
   }
   return fn;
@@ -543,7 +548,7 @@ function hostFor(room: Room, vars: Record<string, string>) {
     personaDescription: ctx.persona?.profile,
     authorsNote: room.premise,
     backgroundEmbedding: c0?.risu?.backgroundHTML,
-    lore: ctx.characters.flatMap((c) => c.lore.map((l) => ({ comment: l.title, content: l.content, key: l.keys.join(", "), alwaysActive: !!l.always }))),
+    lore: [...ctx.characters, ...(ctx.world ? [ctx.world] : [])].flatMap((c) => c.lore.map((l) => ({ comment: l.title, content: l.content, key: l.keys.join(", "), alwaysActive: !!l.always, ...(l.enabled === false ? { enabled: false } : {}), ...(l.secondKeys?.length ? { selective: true, secondkey: l.secondKeys.join(", ") } : {}), ...(l.order ? { insertorder: l.order } : {}) }))),
     llm: async (prompt: { role: string; content: string }[]) => {
       const sys = prompt.filter((p) => p.role === "system").map((p) => p.content).join("\n\n");
       const res = await callAI("chat", { system: sys, messages: prompt.filter((p) => p.role !== "system").map((p) => ({ role: p.role === "user" ? "user" : "assistant", content: p.content })) as { role: "user" | "assistant"; content: string }[], maxTokens: 4000 });
