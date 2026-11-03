@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { deleteImageData, listKV, scanImageData } from "../lib/db";
-import { clearGlobals, deleteEntity, deleteImages, deleteNovel, deleteRoom, getState, requestPersistNow, resetAllData, useApp } from "../lib/store";
+import { clearAiButtons, clearGlobals, deleteEntity, deleteImages, deleteNovel, deleteRoom, getState, requestPersistNow, resetAllData, useApp } from "../lib/store";
 import { resetUiMemory } from "../lib/uiMemory";
 
 const fmt = (n: number) => (n >= 1073741824 ? `${(n / 1073741824).toFixed(2)}GB` : n >= 1048576 ? `${(n / 1048576).toFixed(1)}MB` : n >= 1024 ? `${(n / 1024).toFixed(0)}KB` : `${n}B`);
@@ -12,7 +12,7 @@ const sizeOf = (v: unknown) => {
   }
 };
 const KV_LABEL: Record<string, string> = { settings: "설정", usage: "사용량 기록", view: "마지막 화면", sync: "동기화 연결", syncMeta: "동기화 기록", risuGlobals: "봇 전역 변수 · 토글 값", legacyExtra: "가져온 옛 백업 (라이브러리로 옮기기 전)" };
-const LS_LABEL: Record<string, string> = { risuUiState: "봇 화면 상태 (탭 접기 등)" };
+const LS_LABEL: Record<string, string> = { risuUiState: "봇 화면 상태 (탭 접기 등)", botAiButtons: "AI를 부르는 봇 버튼 기억 (✨AI 표시)" };
 
 /** 설정 → 저장소: 이 브라우저에 저장된 데이터 확인 · 정리 */
 export default function StorageTab() {
@@ -96,6 +96,7 @@ export default function StorageTab() {
       /* 무시 */
     }
     if (k === "risuUiState") resetUiMemory();
+    if (k === "botAiButtons") clearAiButtons();
     void refresh();
   };
   const reset = () => {
