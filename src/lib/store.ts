@@ -1,14 +1,14 @@
 import { useSyncExternalStore } from "react";
 import { CHOICE_MARKER, previewText, splitChoices } from "./choices";
 import { deleteKV, getImageData, loadAll, putImages, putKV, putRecords, requestPersist, wipeDatabase } from "./db";
-import { imagePool, imagePromptSection, runScripts, shrinkImage, sniffMedia, uniqueName, type ImagePool } from "./images";
+import { hasOwnImageRules, imagePool, imagePromptSection, runScripts, shrinkImage, sniffMedia, uniqueName, type ImagePool } from "./images";
 import { uid } from "./id";
 import { libraryFromExtra, type LegacyImport } from "./importLegacy";
 import { greetingRoom, type RisuImage, type RisuImport } from "./risu";
 import { buildEnv, cbs, chatIndexOf, processContext, processMessages, type EnvInput } from "./risuRuntime";
 import { formatLore, matchLore, type LoreHit } from "./lore";
 import { buildMemoryRequest, cleanMemory, pendingForMemory } from "./memory";
-import { botHandlesChoices, buildHistory, buildSystemPrompt, instructionsOf, outputTokensFor, type StoryContext } from "./prompt";
+import { botHandlesChoices, buildHistory, buildSystemPrompt, foldRequest, instructionsOf, outputTokensFor, type StoryContext } from "./prompt";
 import { P, setPromptOverrides } from "./prompts";
 import { generate, ProviderError, type GenerateRequest, type GenerateResult, type Usage } from "./providers";
 import { emptyUsage, recordUsage, type UsageData, type UsageKind } from "./usage";
@@ -770,6 +770,10 @@ export function stopGeneration() {
 export async function send(roomId: string, text: string) {
   const r = state.rooms[roomId];
   if (!r || isGenerating()) return;
+  // 입력 없이 [보내기]: Lua 봇은 사용자 차례가 있어야 턴을 처리하므로(상태·그림 갱신) 짧은 이어 쓰기 입력을 남긴다.
+  // 그 밖의 이야기는 기록에 남기지 않고 요청에만 이어 쓰기 지시를 붙인다 (runGeneration)
+  const lastMsg = r.messages.filter((m) => !m.error).at(-1);
+  if (!text.trim() && lastMsg?.role === "assistant" && state.settings.risu.lua && triggersOf(r).some((t) => t.effect?.[0]?.type === "triggerlua")) text = P("chat.continueInput");
   // 봇의 입력 스크립트(editinput) + Lua editInput
   const scripted = runScripts(text.trim(), poolFor(r).scripts, "editinput", state.settings.risu.cbs ? cbsFor(r, { chatIndex: splitRest(r) }) : undefined).text.trim();
   const t = String(await runLuaEdit(r, "editInput", scripted)).trim();
@@ -817,6 +821,8 @@ async function runGeneration(roomId: string, note = "") {
   // 봇의 프롬프트 스크립트(editprocess): AI에게 보내는 대화만 바꾸고 저장된 대화는 그대로
   const history = buildHistory(roomP, s.contextMessages).map((h) => ({ ...h, content: runScripts(h.content, pool.scripts, "editprocess", procCbs).text }));
   if (!history.length) history.push({ role: "user", content: P("chat.start") });
+  // 입력 없이 [보내기]: 마지막이 AI 응답이면 이어서 다음 전개를 쓰게 한다 (대화는 사용자 차례로 끝나야 하므로 요청 한 줄을 붙임)
+  else if (history[history.length - 1].role === "assistant") history.push({ role: "user", content: P("chat.continue") });
   // 로어북은 시스템 프롬프트가 아니라 마지막 입력에 붙인다 → 앞부분이 고정돼 프롬프트 캐시가 유지됨
   const lore = loreFor(roomP, ctx);
   if (lore.length) {
@@ -835,6 +841,11 @@ async function runGeneration(roomId: string, note = "") {
     const last = history[history.length - 1];
     history[history.length - 1] = { ...last, content: `${last.content}\n\n${P("chat.note", { 내용: note.trim() })}` };
   }
+  // 그림 자주 쓰기: 시스템 프롬프트(맨 앞)만으로는 긴 대화에서 약해지므로 최신 입력 바로 뒤에도 한 번 더
+  if (s.risu.imageEveryTurn && (hasOwnImageRules(ctx, pool) || pool.assets.some((m) => m.kind !== "icon"))) {
+    const last = history[history.length - 1];
+    history[history.length - 1] = { ...last, content: `${last.content}\n\n${P("chat.imageReminder")}` };
+  }
   // 봇 트리거의 시스템 프롬프트 추가 (위치: 맨 앞 / 대화 기록 끝 / 프롬프트 끝)
   const sp = started.systemPrompt;
   if (sp && (sp.historyend.trim() || sp.promptend.trim())) {
@@ -847,9 +858,10 @@ async function runGeneration(roomId: string, note = "") {
     const req = [{ role: "system", content: system }, ...history] as { role: string; content: string }[];
     const edited = await runLuaEdit(room, "editRequest", req);
     if (Array.isArray(edited) && edited !== req) {
-      system = edited.filter((m) => m.role === "system").map((m) => String(m.content ?? "")).join("\n\n");
-      const rest = edited.filter((m) => m.role !== "system").map((m) => ({ role: (m.role === "user" ? "user" : "assistant") as "user" | "assistant", content: String(m.content ?? "") }));
-      if (rest.length) history.splice(0, history.length, ...rest);
+      // 봇이 대화 중간·끝에 넣은 시스템 메시지(그림 지침·장면 상태 등)는 그 자리에 둔다 — 맨 앞으로 모으면 긴 대화에서 지침이 묻힘
+      const folded = foldRequest(edited.map((m) => ({ role: String(m.role), content: String(m.content ?? (m as { data?: unknown }).data ?? "") })));
+      system = folded.system;
+      if (folded.messages.length) history.splice(0, history.length, ...folded.messages);
     }
   }
   controller = new AbortController();

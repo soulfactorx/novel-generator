@@ -83,7 +83,7 @@ describe("프롬프트", () => {
     expect(imagePromptSection({ characters: [own] }, p1, "chat", false).join("\n")).toContain("장면에 맞을 때");
     const plain = char();
     const p2 = imagePool({ characters: [plain] }, [img("i1", "항구")]);
-    expect(imagePromptSection({ characters: [plain] }, p2, "chat", true).join("\n")).toContain("매 응답마다 1개");
+    expect(imagePromptSection({ characters: [plain] }, p2, "chat", true).join("\n")).toContain("매 응답마다 적어도 1개");
   });
   test("봇 Lua가 선택지를 직접 만들면 이 앱의 [선택지] 지시를 빼서 출력 형식이 부딪히지 않게", () => {
     const s = { ...DEFAULT_SETTINGS, choices: true };

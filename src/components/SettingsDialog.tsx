@@ -186,6 +186,7 @@ function WritingTab() {
       <Field label={`AI에게 보내는 최근 메시지 수: ${s.contextMessages}`} hint="많을수록 앞 내용을 잘 기억하지만 비용이 늘어납니다. 이보다 오래된 대화는 장기 기억으로 정리됩니다.">
         <input type="range" min={10} max={200} step={10} value={s.contextMessages} onChange={(e) => updateSettings({ contextMessages: Number(e.target.value) })} className="w-full accent-violet-600" />
       </Field>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={s.dialogueColors} onChange={(e) => updateSettings({ dialogueColors: e.target.checked })} /> 화자별 대사 색 (인물마다 대사를 다른 색으로, 색은 라이브러리에서 고를 수 있음)</label>
       <Field label="화면 테마"><Choice value={s.theme} onChange={(theme) => updateSettings({ theme })} options={[["system", "시스템"], ["light", "밝게"], ["dark", "어둡게"]]} /></Field>
     </div>
   );
