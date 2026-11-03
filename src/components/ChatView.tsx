@@ -37,7 +37,10 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
   const myLive = live && room && live.roomId === room.id ? live : null;
   const hasKey = settings.provider === "openai" ? !!settings.keys.openai || /localhost|127\.0\.0\.1/.test(settings.openaiBaseUrl) : !!settings.keys[settings.provider];
 
-  useEffect(() => endRef.current?.scrollIntoView?.({ block: "end" }), [room?.messages.length, myLive?.text]);
+  useEffect(() => {
+    // 최신 Chromium의 scrollIntoView는 Promise를 돌려준다 — effect 정리 함수로 넘어가면 React가 멈추므로 값을 버린다
+    void endRef.current?.scrollIntoView?.({ block: "end" });
+  }, [room?.messages.length, myLive?.text]);
   useEffect(() => () => stopBgm(), [room?.id]); // 다른 이야기로 가면 배경 음악 멈춤
 
   if (!room)

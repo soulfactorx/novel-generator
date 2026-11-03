@@ -370,7 +370,10 @@ export function sanitizeHtml(html: string, urls: Record<string, string>, scope?:
       for (const a of [...el.attributes]) {
         const n = a.name.toLowerCase();
         const media = (tag === "img" || tag === "audio" || tag === "video" || tag === "source") && n === "src";
-        const keep = n === "style" ? safeStyle(a.value) : media ? (safeUrl(a.value) ? a.value : "") : n === "poster" ? (safeUrl(a.value) ? a.value : "") : (ATTRS.has(n) || isAria(n)) && !n.startsWith("on") ? a.value : "";
+        // 값 없는 속성(checked · open · controls · data-x …)은 그대로 둠 — 빈 값이라고 지우면 봇 화면 상태가 사라짐
+        const plain = (ATTRS.has(n) || isAria(n)) && !n.startsWith("on");
+        if (plain && a.value === "" && n !== "src" && n !== "poster") continue;
+        const keep = n === "style" ? safeStyle(a.value) : media ? (safeUrl(a.value) ? a.value : "") : n === "poster" ? (safeUrl(a.value) ? a.value : "") : plain ? a.value : "";
         if (keep) el.setAttribute(n, keep);
         else el.removeAttribute(a.name);
       }
@@ -411,17 +414,17 @@ export function hasOwnImageRules(ctx: StoryContext, pool: ImagePool): boolean {
 }
 
 /** 시스템 프롬프트에 붙일 그림 안내 (없으면 빈 배열) */
-export function imagePromptSection(ctx: StoryContext, pool: ImagePool, mode: "chat" | "novel"): string[] {
+export function imagePromptSection(ctx: StoryContext, pool: ImagePool, mode: "chat" | "novel", everyTurn = false): string[] {
   const out: string[] = [];
   const own = hasOwnImageRules(ctx, pool);
-  if (own) out.push("", "## 그림 사용", mode === "chat" ? "설정에 정해진 그림 표시 규칙(태그 형식·이름)을 지켜서, 장면에 맞을 때 그림 표시를 쓴다." : "설정에 정해진 그림 표시 규칙(태그 형식·이름)을 소설 원고에서도 지킨다. 그림 표시는 해당 장면의 문단 바로 다음에 별도 줄로 쓰고, 한 회차에 너무 많이 넣지 않는다.");
+  if (own) out.push("", "## 그림 사용", mode === "chat" ? (everyTurn ? "설정에 정해진 그림 표시 규칙(태그 형식·이름)을 지켜서 그림 표시를 쓴다. 그림이 있는 인물이 장면에 나오면, 빈도에 관한 다른 지시보다 우선해 매 응답마다 그 인물의 그림 표시를 적어도 하나 넣는다." : "설정에 정해진 그림 표시 규칙(태그 형식·이름)을 지켜서, 장면에 맞을 때 그림 표시를 쓴다.") : "설정에 정해진 그림 표시 규칙(태그 형식·이름)을 소설 원고에서도 지킨다. 그림 표시는 해당 장면의 문단 바로 다음에 별도 줄로 쓰고, 한 회차에 너무 많이 넣지 않는다.");
   else if (pool.assets.length) {
     const names = pool.assets.filter((m) => m.kind !== "icon").map((m) => m.name);
     if (names.length)
       out.push(
         "",
         "## 그림 사용",
-        `장면·인물·장소에 잘 맞는 그림이 아래 목록에 있으면, 해당 문단 바로 다음에 {{img::이름}} 한 줄을 따로 쓴다. 이름은 목록과 똑같이 쓰고, ${mode === "chat" ? "한 응답에 1개 이하" : "한 회차에 3개 이하"}로, 어울리는 그림이 없으면 쓰지 않는다.`,
+        `장면·인물·장소에 잘 맞는 그림이 아래 목록에 있으면, 해당 문단 바로 다음에 {{img::이름}} 한 줄을 따로 쓴다. 이름은 목록과 똑같이 쓰고, ${mode === "chat" ? (everyTurn ? "매 응답마다 1개" : "한 응답에 1개 이하") : "한 회차에 3개 이하"}로, 어울리는 그림이 없으면 쓰지 않는다.`,
         `그림 목록: ${names.slice(0, 150).join(", ")}`,
       );
   }

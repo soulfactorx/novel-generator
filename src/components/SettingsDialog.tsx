@@ -406,6 +406,7 @@ const RISU_OPTS: [keyof Settings["risu"], string, string][] = [
   ["triggers", "블록 트리거", "봇의 조건·효과 트리거 (변수 바꾸기, 시스템 프롬프트 추가 등)"],
   ["background", "배경 HTML · CSS", "봇이 정한 화면 꾸밈"],
   ["markdown", "마크다운 표시", "*기울임* · **굵게** · ~~취소선~~"],
+  ["imageEveryTurn", "그림 자주 쓰기", "봇에 그림 규칙이 있으면, 장면에 인물이 있을 때 매 응답마다 그림을 적어도 한 장 넣게 합니다 (끄면 봇이 정한 빈도대로)"],
 ];
 function RisuOptionsField() {
   const r = useApp((x) => x.settings.risu);
