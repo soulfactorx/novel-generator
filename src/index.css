@@ -47,6 +47,9 @@ body {
 .risu-bgimg { position: absolute; inset: 0; background-size: cover; background-position: center; }
 .risu-stage { contain: layout paint; container-type: size; --risu-fixed: fixed; }
 .risu-html { position: relative; }
-/* 화자별 대사 색 (dialogue.ts) — 인물마다 --dlg-h(색상환 각도), 직접 고른 색은 style 의 color 가 우선 */
-.dlg { color: hsl(var(--dlg-h, 220) 62% 36%); }
-.dark .dlg { color: hsl(var(--dlg-h, 220) 72% 74%); }
+/* 대사 색 (dialogue.ts) — 설정에서 고른 색이 있으면 --dlg-user */
+.dlg { color: var(--dlg-user, #2f5fa8); }
+.dark .dlg { color: var(--dlg-user, #93b8ec); }
+/* 본문 폭: 화면에 맞춤(기본) · 읽기 좋은 폭 */
+.content-width { width: 100%; max-width: none; }
+.content-width.comfort { max-width: 48rem; }
