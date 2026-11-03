@@ -307,7 +307,7 @@ function DataTab() {
       <div className="card space-y-2">
         <div className="font-bold">📥 백업 가져오기</div>
         <p className="hint">이 앱의 백업 파일, E.No.S Studio의 백업 파일(전체 백업·자동 백업), <b>RisuAI 파일</b>(캐릭터 카드 .charx·.json·.png, 모듈 .risum, 로어북·채팅 .json)을 가져올 수 있습니다. 기존 이야기는 지워지지 않습니다.</p>
-        <input ref={fileRef} type="file" accept=".json,application/json,.charx,.risum,.png,.jpg,.jpeg" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }} />
+        <input ref={fileRef} type="file" accept=".json,application/json,.charx,.risum,.zip,application/zip,.png,.jpg,.jpeg" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }} />
         <button className="btn-ghost border border-stone-300 dark:border-stone-700" onClick={() => fileRef.current?.click()}>파일 선택</button>
         {pending && (
           <div className="space-y-2 rounded-lg bg-violet-50 p-3 text-sm dark:bg-violet-950/40">
