@@ -31,9 +31,13 @@ body {
   @apply bg-stone-50 text-stone-800 antialiased dark:bg-stone-950 dark:text-stone-100;
   font-family: "Pretendard", "Noto Sans KR", system-ui, sans-serif;
 }
-.story { font-family: "Noto Serif KR", "Nanum Myeongjo", serif; line-height: 1.9; word-break: keep-all; overflow-wrap: anywhere; }
+.story { font-family: "Noto Serif KR", "Nanum Myeongjo", serif; line-height: 1.75; letter-spacing: -0.005em; word-break: keep-all; overflow-wrap: anywhere; }
+/* 봇 글의 문단 사이 빈 줄 → 한 줄 통째가 아니라 짧은 간격 (RisuText tidy 가 넣음) */
+.para-gap { display: block; height: 0.55em; }
 /* RisuAI 봇의 그림·표시 HTML */
-.risu-html img { display: block; max-width: min(100%, 32rem); max-height: 70vh; margin: 0.75rem auto; border-radius: 0.75rem; object-fit: contain; }
+/* 그림: 봇이 class로 스타일을 정한 그림은 봇 CSS를 그대로 따르고(넘치지만 않게), 이 앱이 넣은 그림·스타일 없는 그림만 기본 모양 */
+:where(.risu-html) img { max-width: 100%; }
+:where(.risu-html) :where(img.risu-img, img:not([class])) { display: block; max-width: min(100%, 30rem); max-height: 65vh; margin: 0.75rem auto; border-radius: 0.75rem; object-fit: contain; cursor: zoom-in; }
 .risu-html table { border-collapse: collapse; }
 .risu-html td, .risu-html th { border: 1px solid rgb(120 113 108 / 0.3); padding: 0.25rem 0.5rem; }
 .risu-html details { margin: 0.5rem 0; }
@@ -50,6 +54,8 @@ body {
 /* 대사 색 (dialogue.ts) — 설정에서 고른 색이 있으면 --dlg-user */
 .dlg { color: var(--dlg-user, #2f5fa8); }
 .dark .dlg { color: var(--dlg-user, #93b8ec); }
-/* 본문 폭: 화면에 맞춤(기본) · 읽기 좋은 폭 */
-.content-width { width: 100%; max-width: none; }
-.content-width.comfort { max-width: 48rem; }
+/* 본문 폭 (설정 → 글쓰기): 좁게 · 보통 · 화면 가득 */
+.content-width { width: 100%; }
+.content-width.cw-narrow { max-width: 50rem; }
+.content-width.cw-wide { max-width: 64rem; }
+.content-width.cw-full { max-width: none; }

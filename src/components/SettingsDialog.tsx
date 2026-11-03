@@ -21,14 +21,20 @@ const TABS = [["ai", "AI 연결"], ["writing", "글쓰기"], ["rating", "콘텐�
 export default function SettingsDialog({ initialTab, onClose }: { initialTab: string; onClose: () => void }) {
   const [tab, setTab] = useState(initialTab);
   return (
-    <Dialog title="설정" onClose={onClose} wide>
-      <div className="mb-4 flex gap-1 overflow-x-auto">
-        {TABS.map(([id, label]) => (
-          <button key={id} className={`btn whitespace-nowrap ${tab === id ? "bg-violet-600 text-white" : "bg-stone-200/70 dark:bg-stone-800"}`} onClick={() => setTab(id)}>
-            {label}
-          </button>
-        ))}
-      </div>
+    <Dialog
+      title="설정"
+      onClose={onClose}
+      size="lg"
+      tabs={
+        <div className="flex gap-1 overflow-x-auto">
+          {TABS.map(([id, label]) => (
+            <button key={id} ref={(el) => { if (tab === id) el?.scrollIntoView?.({ block: "nearest", inline: "nearest" }); }} className={`btn whitespace-nowrap py-1.5 ${tab === id ? "bg-violet-600 text-white" : "bg-stone-200/70 dark:bg-stone-800"}`} onClick={() => setTab(id)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      }
+    >
       {tab === "ai" && <AiTab />}
       {tab === "writing" && <WritingTab />}
       {tab === "rating" && <RatingTab />}
@@ -195,7 +201,7 @@ function WritingTab() {
           </>
         )}
       </div>
-      <Field label="본문 폭"><Choice value={s.contentWidth} onChange={(contentWidth) => updateSettings({ contentWidth })} options={[["fit", "화면에 맞춤"], ["comfort", "읽기 좋은 폭 (좁게)"]]} /></Field>
+      <Field label="본문 폭" hint="넓은 화면에서 한 줄이 너무 길면 읽기 어렵습니다. 보통이 읽기 편한 폭입니다."><Choice value={s.readWidth} onChange={(readWidth) => updateSettings({ readWidth })} options={[["narrow", "좁게"], ["wide", "보통"], ["full", "화면 가득"]]} /></Field>
       <Field label="화면 테마"><Choice value={s.theme} onChange={(theme) => updateSettings({ theme })} options={[["system", "시스템"], ["light", "밝게"], ["dark", "어둡게"]]} /></Field>
     </div>
   );

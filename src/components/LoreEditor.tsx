@@ -6,6 +6,9 @@ import type { LoreEntry } from "../lib/types";
 /** 로어북 항목 목록 편집 */
 export default function LoreEditor({ entries, onChange }: { entries: LoreEntry[]; onChange: (e: LoreEntry[]) => void }) {
   const [open, setOpen] = useState<string | null>(null);
+  const [editing] = useState(() => new Set<string>()); // 이번에 연 항목은 묶음으로 옮기지 않음 (편집 중 사라지지 않게)
+  if (open) editing.add(open);
+  const isData = (e: LoreEntry) => dataEntry(e) && !editing.has(e.id);
   const set = (id: string, patch: Partial<LoreEntry>) => onChange(entries.map((e) => (e.id === id ? { ...e, ...patch } : e)));
   const add = () => {
     const e: LoreEntry = { id: uid("l"), title: "", keys: [], content: "", enabled: true };
@@ -19,11 +22,21 @@ export default function LoreEditor({ entries, onChange }: { entries: LoreEntry[]
         <button className="btn-ghost px-2 py-1 text-xs" onClick={add}>+ 항목 추가</button>
       </div>
       <p className="hint">키워드가 최근 대화에 나올 때만 AI에게 전달되는 설정 카드입니다. 장소·조직·물건·과거 사건처럼 가끔 필요한 정보를 넣으면 비용을 아끼면서 설정을 지킬 수 있습니다.</p>
-      {entries.map((e) => (
+      {entries.filter((e) => !isData(e)).map(row)}
+      {entries.some(isData) && (
+        <details className="rounded-lg border border-dashed border-stone-300 dark:border-stone-700">
+          <summary className="cursor-pointer px-3 py-2 text-sm">🤖 봇 데이터 항목 {entries.filter(isData).length}개 <span className="hint">— 키워드가 없어 AI에게 자동으로 전달되지 않고, 봇 스크립트(Lua)가 꺼내 씁니다</span></summary>
+          <div className="space-y-2 p-2">{entries.filter(isData).map(row)}</div>
+        </details>
+      )}
+    </div>
+  );
+  function row(e: LoreEntry) {
+    return (
         <div key={e.id} className={`rounded-lg border border-stone-200 dark:border-stone-800 ${e.enabled ? "" : "opacity-60"}`}>
           <button className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm" onClick={() => setOpen(open === e.id ? null : e.id)}>
             <span className="font-semibold">{e.title || "(제목 없음)"}</span>
-            <span className="truncate text-xs text-stone-500">{e.always ? "항상 전달" : e.keys.join(", ") || "키워드 없음"}</span>
+            <span className="truncate text-xs text-stone-500">{e.always ? "항상 전달" : e.keys.join(", ") || (e.decorators?.includes("activate") ? "데코레이터로 켜짐" : "봇 데이터 · 키워드 없음 (자동으로 전달되지 않음)")}</span>
             <span className="ml-auto text-xs text-stone-400">{open === e.id ? "▲" : "▼"}</span>
           </button>
           {open === e.id && (
@@ -50,10 +63,11 @@ export default function LoreEditor({ entries, onChange }: { entries: LoreEntry[]
             </div>
           )}
         </div>
-      ))}
-    </div>
-  );
+    );
+  }
 }
+/** 키워드 없이 자동으로 켜지지 않는 항목 = 봇이 Lua로 꺼내 쓰는 데이터 (새로 만들어 비어 있는 항목은 제외) */
+const dataEntry = (e: LoreEntry) => !e.always && !e.keys.length && !e.decorators?.includes("activate") && e.content.trim() !== "";
 
 /** 쉼표로 구분된 키워드 입력 (입력 중에는 원문 유지, 벗어날 때 정리) */
 function KeysInput({ keys, onChange }: { keys: string[]; onChange: (k: string[]) => void }) {

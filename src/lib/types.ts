@@ -37,7 +37,7 @@ export interface Settings {
   prompts: Record<string, string>; // 설정 → 프롬프트에서 바꾼 문구 (id → 문구, 바꾼 것만)
   dialogueColors: boolean; // 대사(따옴표)를 다른 색으로
   dialogueColor: string; // 대사 색 (#rrggbb, 빈 값이면 기본 색)
-  contentWidth: "fit" | "comfort"; // 본문 폭: 화면에 맞춤 · 읽기 좋은 폭
+  readWidth: "narrow" | "wide" | "full"; // 본문 폭: 좁게(48rem) · 보통(72rem) · 화면 가득
 }
 
 /** 메시지·회차에 붙는 사용량 (usd: 단가를 아는 경우) */
@@ -217,7 +217,7 @@ export const DEFAULT_SETTINGS: Settings = {
   prompts: {},
   dialogueColors: true,
   dialogueColor: "",
-  contentWidth: "fit",
+  readWidth: "wide",
 };
 
 export interface RisuOptions {
@@ -250,7 +250,8 @@ export function normalizeSettings(raw: unknown): Settings {
   s.temperature = Math.min(1, Math.max(0, Number(s.temperature) || 0));
   s.monthlyBudget = Math.max(0, Number(s.monthlyBudget) || 0);
   s.krwPerUsd = Math.max(0, Number(s.krwPerUsd) || 0);
-  if (s.contentWidth !== "comfort") s.contentWidth = "fit";
+  if (!["narrow", "wide", "full"].includes(s.readWidth)) s.readWidth = "wide";
+  delete (s as { contentWidth?: unknown }).contentWidth; // v0.13 의 옛 설정
   if (typeof s.dialogueColor !== "string" || !/^#[0-9a-f]{6}$/i.test(s.dialogueColor)) s.dialogueColor = "";
   s.readerFontSize = Math.min(28, Math.max(13, Math.round(Number(s.readerFontSize) || 18)));
   s.contextMessages = Math.min(400, Math.max(4, Math.round(Number(s.contextMessages) || 40)));
