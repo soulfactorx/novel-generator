@@ -1,0 +1,42 @@
+import "fake-indexeddb/auto";
+import { createRequire } from "node:module";
+import { readFileSync, writeFileSync } from "node:fs";
+import { test, vi } from "vitest";
+import { setLuaWasmUri } from "../src/lib/risuLua";
+import { zip } from "../src/lib/exporters";
+import { parseRisuFile } from "../src/lib/risu";
+import { renderRisu } from "../src/lib/images";
+import { claudeStream, mockFetch } from "./helpers";
+
+test("newbot", async () => {
+  setLuaWasmUri(createRequire(import.meta.url).resolve("wasmoon/dist/glue.wasm"));
+  const s = await import("../src/lib/store");
+  await s.init();
+  const t0 = Date.now();
+  const data = await parseRisuFile("bot.charx", zip([{ name: "card.json", data: readFileSync("/tmp/claude-0/-home-user-novel-generator/de0879df-ff7c-51ec-bd96-f9a446f563f8/scratchpad/newbot/card.json") }, { name: "module.risum", data: readFileSync("/tmp/claude-0/-home-user-novel-generator/de0879df-ff7c-51ec-bd96-f9a446f563f8/scratchpad/newbot/module.risum") }]));
+  const c: any = data.library[0];
+  console.log("parse ms", Date.now() - t0, "skipped", data.skipped, "lore", c.lore.length, "risu", Object.keys(c.risu ?? {}), "toggles", JSON.stringify(c.risu?.toggles)?.slice(0, 100), "scripts", c.scripts?.length, "profile", c.profile.length, "instr", (c.instructions ?? "").length);
+  const warn = vi.spyOn(console, "warn"); const err = vi.spyOn(console, "error");
+  const { room } = await s.importRisu(data, { greeting: 0 });
+  const r = () => s.getState().rooms[room!];
+  const show = async (label: string, m = r().messages[r().messages.length - 1]) => {
+    const t1 = Date.now();
+    const lua = s.displayLua(r(), m.id);
+    const pre = lua ? await lua(m.text) : m.text;
+    const out = renderRisu(pre, s.poolFor(r()), s.displayCbs(r(), m.id)).html;
+    console.log(`==== ${label} (${Date.now() - t1}ms) len ${out.length}\n` + out.replace(/<style[\s\S]*?<\/style>/g, "").slice(0, 1500));
+  };
+  await show("greeting");
+  writeFileSync("/tmp/claude-0/-home-user-novel-generator/de0879df-ff7c-51ec-bd96-f9a446f563f8/scratchpad/newbot/bg.html", c.risu?.backgroundHTML ?? "");
+  s.updateSettings({ provider: "anthropic", keys: { gemini: "", anthropic: "ak", openai: "" } });
+  const calls = mockFetch(claudeStream("오늘 아침, 휴대폰이 울렸다.\n\n\"일어났어?\""), claudeStream("보조"), claudeStream("보조2"));
+  const t2 = Date.now();
+  await s.send(room!, "등록 정보를 확인한다");
+  console.log("send ms", Date.now() - t2, "calls", calls.length);
+  writeFileSync("/tmp/claude-0/-home-user-novel-generator/de0879df-ff7c-51ec-bd96-f9a446f563f8/scratchpad/newbot/request.json", JSON.stringify(calls.map((c) => c.body), null, 1));
+  console.log("msgs", r().messages.map((m) => [m.role, m.text.slice(0, 150)]));
+  await show("reply");
+  console.log("vars", Object.keys(r().vars ?? {}).slice(0, 30));
+  console.log("WARN", warn.mock.calls.map((c) => c.map(String).join(" ").slice(0, 300)).slice(0, 5));
+  console.log("ERR", err.mock.calls.map((c) => c.map(String).join(" ").slice(0, 300)).slice(0, 5));
+}, 180000);
