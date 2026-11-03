@@ -9,6 +9,7 @@ import type { EpisodeLength, Novel } from "../lib/types";
 import CastPicker from "./CastPicker";
 import CoverPanel from "./CoverPanel";
 import RisuText from "./RisuText";
+import { SpeakersProvider } from "./Speakers";
 import { htmlToBlocks, imagePool, renderRisu, type ImagePool } from "../lib/images";
 
 type Tab = "plan" | "outline" | "manuscript";
@@ -213,7 +214,7 @@ function ManuscriptTab({ novel: n, live, busy, onRead, onOutline, onOpenSettings
       {live ? (
         <div className="space-y-3 border-t border-stone-200 pt-4 dark:border-stone-800">
           <LiveHeader label={`${live.index + 1}화 「${n.outline[live.index]?.title ?? ""}」 집필 중${live.until !== undefined && live.until > live.index ? ` (${live.until + 1}화까지 연속)` : ""}`} live={live} />
-          {live.text ? <RisuText text={live.text} pool={poolFor(n)} /> : live.thinking && <div className="line-clamp-4 text-xs italic text-stone-500">{live.thinking.slice(-400)}</div>}
+          {live.text ? <SpeakersProvider ctx={contextFor(n)}><RisuText text={live.text} pool={poolFor(n)} /></SpeakersProvider> : live.thinking && <div className="line-clamp-4 text-xs italic text-stone-500">{live.thinking.slice(-400)}</div>}
           <div ref={endRef} />
         </div>
       ) : (
@@ -272,7 +273,7 @@ function Reader({ novel: n, index, busy, onIndex, onClose }: { novel: Novel; ind
           </div>
         </div>
       ) : (
-        <div style={{ fontSize }}><RisuText text={e.text} pool={pool} /></div>
+        <div style={{ fontSize }}><SpeakersProvider ctx={contextFor(n, lib)}><RisuText text={e.text} pool={pool} /></SpeakersProvider></div>
       )}
       {diag && <DiagnosisDialog title={`🩺 ${index + 1}화 진단`} run={(onText) => diagnoseEpisode(n.id, index, onText)} applyLabel="진단 반영해 다시 쓰기" canApply={!busy} onApply={(d) => setRewrite(d)} onClose={() => setDiag(false)} />}
       {e.summary && !editing && <details className="hint"><summary className="cursor-pointer">이 회차 요약 (다음 회차 집필에 사용)</summary><textarea className="input mt-2 min-h-20 text-xs" value={e.summary} onChange={(x) => editEpisode(n.id, index, { summary: x.target.value })} aria-label="회차 요약" /></details>}

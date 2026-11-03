@@ -6,6 +6,7 @@ import Dialog from "./Dialog";
 import { PROVIDER_LABEL } from "../lib/providers/catalog";
 import MessageView from "./Message";
 import RisuText from "./RisuText";
+import { SpeakersProvider } from "./Speakers";
 import { imagePool } from "../lib/images";
 import { BgmButton, EmotionPanel, RisuBackground } from "./RisuStage";
 import { stopBgm } from "../lib/bgm";
@@ -73,13 +74,14 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
   const bgSrc = settings.risu.background ? [...ctx.characters, ...(ctx.world ? [ctx.world] : [])].map((o) => o.risu?.backgroundHTML ?? "").filter((x) => x.trim()).join("\n") : "";
   const myMemory = memoryJob?.roomId === room.id ? memoryJob : null;
   const submit = (text: string) => {
-    // 빈 입력: 첫 장면이거나, 마지막이 내 메시지(봇 선택지 버튼이 넣은 것 등)일 때만 → AI가 이어서 씀
-    if (busy || (!text.trim() && room.messages.length > 0 && last?.role !== "user")) return;
+    // 빈 입력도 보낼 수 있음: 첫 장면 시작, 내 메시지(봇 선택지 버튼 등)에 대한 응답, 또는 앞 내용에 이어서 다음 전개
+    if (busy) return;
     setInput("");
     void send(room.id, text);
   };
 
   return (
+    <SpeakersProvider ctx={ctx}>
     <div className="flex min-h-0 flex-1 flex-col">
       <Header onMenu={onMenu} title={room.title} onTitle={(t) => updateRoom(room.id, { title: t })} right={
         <>
@@ -194,7 +196,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
           <textarea
             className="input max-h-48 min-h-11 flex-1 resize-none"
             rows={2}
-            placeholder={hasKey ? (last?.role === "user" ? "비워 두고 [보내기]를 누르면 AI가 이어서 씁니다 (Ctrl+Enter 전송)" : "주인공의 행동이나 대사, 원하는 전개를 입력하세요 (Ctrl+Enter 전송)") : "먼저 [설정]에서 AI API 키를 입력하세요"}
+            placeholder={hasKey ? "주인공의 행동이나 대사, 원하는 전개를 입력하세요. 비워 두고 [보내기]를 누르면 AI가 이어서 씁니다 (Ctrl+Enter 전송)" : "먼저 [설정]에서 AI API 키를 입력하세요"}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -244,6 +246,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
       {toggleOpen && <Dialog title="🎛 봇 설정 (토글)" onClose={() => setToggleOpen(false)}><TogglePanel groups={togglesOf(ctx)} /></Dialog>}
       {roomDialog && <RoomDialog room={room} initialTab={roomDialog} onClose={() => setRoomDialog(null)} onOpenLibrary={() => { setRoomDialog(null); onOpenLibrary(); }} />}
     </div>
+    </SpeakersProvider>
   );
 }
 

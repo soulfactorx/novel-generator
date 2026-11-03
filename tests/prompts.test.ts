@@ -35,3 +35,26 @@ describe("프롬프트 모음", () => {
     expect(changedPrompts({ "chat.start": "시작!", "chat.note": defaultPrompt("chat.note"), "없는.id": "x" })).toEqual({ "chat.start": "시작!" });
   });
 });
+
+describe("봇이 고친 요청 접기 (foldRequest)", () => {
+  test("맨 앞 시스템만 시스템 프롬프트로, 중간·끝 시스템 메시지는 그 자리의 사용자 차례에", async () => {
+    const { foldRequest } = await import("../src/lib/prompt");
+    const r = foldRequest([
+      { role: "system", content: "앱 규칙" },
+      { role: "system", content: "봇 패킷" },
+      { role: "assistant", content: "인사말" },
+      { role: "user", content: "안녕" },
+      { role: "assistant", content: "응답" },
+      { role: "user", content: "죽을 먹인다" },
+      { role: "system", content: "그림 지침" },
+      { role: "system", content: "장면 상태" },
+    ]);
+    expect(r.system).toBe("앱 규칙\n\n봇 패킷");
+    expect(r.messages.map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant", "user"]);
+    expect(r.messages[0].content).toBe("이야기를 시작해 주세요.");
+    expect(r.messages[4].content).toBe("죽을 먹인다\n\n<시스템 지시>\n그림 지침\n</시스템 지시>\n\n<시스템 지시>\n장면 상태\n</시스템 지시>");
+    // AI 차례 바로 앞에 끼운 시스템 메시지는 앞 사용자 차례 끝으로
+    const r2 = foldRequest([{ role: "user", content: "a" }, { role: "system", content: "s" }, { role: "assistant", content: "b" }]);
+    expect(r2.messages).toEqual([{ role: "user", content: "a\n\n<시스템 지시>\ns\n</시스템 지시>" }, { role: "assistant", content: "b" }]);
+  });
+});

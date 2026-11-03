@@ -55,7 +55,7 @@ describe("settings & content rating", () => {
     expect(buildSystemPrompt({ ...DEFAULT_SETTINGS, choices: false }, room())).not.toContain("[선택지]");
     expect(buildSystemPrompt(normalizeSettings({ contentRating: "adult", adultConfirmed: true }), room())).toContain("미성년자");
   });
-  test("history: limit, skips errors, starts with user", () => {
+  test("history: limit, skips errors, starts with user (대화 첫 AI 응답은 시작 요청을 붙여 유지)", () => {
     const msgs = [
       { id: "1", role: "assistant" as const, text: "인트로", createdAt: 0 },
       { id: "2", role: "user" as const, text: "a", createdAt: 0 },
@@ -63,8 +63,11 @@ describe("settings & content rating", () => {
       { id: "4", role: "assistant" as const, text: "b", choices: ["c1"], createdAt: 0 },
     ];
     const h = buildHistory(room({ messages: msgs }), 10);
-    expect(h.map((m) => m.role)).toEqual(["user", "assistant"]);
-    expect(h[1].content).toContain("[선택지]\n1. c1");
+    expect(h.map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(h[0].content).toBe("이야기를 시작해 주세요.");
+    expect(h[1].content).toBe("인트로");
+    expect(h[3].content).toContain("[선택지]\n1. c1");
+    expect(buildHistory(room({ messages: msgs }), 2).map((m) => m.role)).toEqual(["user", "assistant"]); // 잘린 앞부분은 장기 기억이 맡음
   });
 });
 

@@ -359,3 +359,16 @@ describe("RisuAI 패키지 보관·재사용", () => {
     expect((s2.getState().library[c1.id] as any).greetings).toEqual(["새 인사"]);
   });
 });
+
+test("입력 없이 보내기: 마지막이 AI 응답이면 이어 쓰기 요청을 붙여 다음 턴 진행 (기록에는 남지 않음)", async () => {
+  const s = await freshStore();
+  s.updateSettings({ provider: "anthropic", keys, streaming: false });
+  const id = s.createRoom();
+  const calls = mockFetch(json({ content: [{ type: "text", text: "첫 장면" }], usage: { input_tokens: 1, output_tokens: 1 }, stop_reason: "end_turn" }), json({ content: [{ type: "text", text: "다음 장면" }], usage: { input_tokens: 1, output_tokens: 1 }, stop_reason: "end_turn" }));
+  await s.send(id, "");
+  await s.send(id, "");
+  const last = calls[1].body.messages;
+  expect(last[last.length - 2].role).toBe("assistant");
+  expect(JSON.stringify(last[last.length - 1])).toContain("이어서 다음 장면");
+  expect(s.getState().rooms[id].messages.map((m) => [m.role, m.text])).toEqual([["assistant", "첫 장면"], ["assistant", "다음 장면"]]);
+});
