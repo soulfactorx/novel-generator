@@ -812,7 +812,7 @@ async function runGeneration(roomId: string, note = "") {
     const last = history[history.length - 1];
     history[history.length - 1] = { ...last, content: [last.content, sp.historyend.trim(), sp.promptend.trim()].filter(Boolean).join("\n\n") };
   }
-  let system = [sp?.start.trim(), buildSystemPrompt(s, room, ctx, imagePromptSection(ctx, pool, "chat"))].filter(Boolean).join("\n\n");
+  let system = [sp?.start.trim(), buildSystemPrompt(s, room, ctx, imagePromptSection(ctx, pool, "chat", s.risu.imageEveryTurn))].filter(Boolean).join("\n\n");
   // Lua editRequest: AI에게 보낼 요청 전체를 봇이 고칠 수 있게
   {
     const req = [{ role: "system", content: system }, ...history] as { role: string; content: string }[];

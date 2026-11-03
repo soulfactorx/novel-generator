@@ -57,7 +57,8 @@ export function buildSystemPrompt(s: Settings, room: Room, ctx: StoryContext = {
     `- 대사: ${DIALOGUE[s.style.dialogue]}`,
     `- ${RATING_POLICY[s.contentRating]}`,
   ];
-  if (s.choices) {
+  // 봇이 자기 선택지를 직접 만들면(Lua로 선택지 버튼 등) 이 앱의 선택지 형식을 요구하지 않는다 — 봇의 출력 형식과 부딪힘
+  if (s.choices && !(s.risu.lua && botHandlesChoices(ctx))) {
     parts.push(
       "",
       "## 선택지",
@@ -112,4 +113,10 @@ export function buildHistory(room: Room, limit: number): { role: "user" | "assis
   }));
   while (recent.length && recent[0].role !== "user") recent.shift();
   return recent;
+}
+
+/** 봇의 Lua가 선택지를 직접 다루는지 (예: 응답 끝 선택지 줄을 읽어 버튼으로 그림) */
+export function botHandlesChoices(ctx: StoryContext): boolean {
+  const lua = (t: unknown) => ((t as { effect?: { type?: string; code?: string }[] })?.effect ?? []).filter((e) => e?.type === "triggerlua" && typeof e.code === "string").map((e) => e.code!);
+  return [...ctx.characters, ...(ctx.world ? [ctx.world] : [])].some((o) => (o.risu?.triggers ?? []).flatMap(lua).some((c) => /\bchoices?\b|선택지/i.test(c)));
 }

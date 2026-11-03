@@ -209,7 +209,7 @@ export const DEFAULT_SETTINGS: Settings = {
   krwPerUsd: 1400,
   customPrices: {},
   coverModel: "gemini-nano-banana-2.1",
-  risu: { cbs: true, scripts: true, triggers: true, lua: true, background: true, markdown: true },
+  risu: { cbs: true, scripts: true, triggers: true, lua: true, background: true, markdown: true, imageEveryTurn: true },
 };
 
 export interface RisuOptions {
@@ -219,6 +219,7 @@ export interface RisuOptions {
   lua: boolean; // Lua 트리거 · 버튼
   background: boolean; // 배경 HTML·CSS
   markdown: boolean; // *기울임* **굵게** 표시
+  imageEveryTurn: boolean; // 봇 그림 규칙이 있으면 매 응답마다 그림 표시를 적어도 하나
 }
 
 /** 저장된 설정을 기본값과 병합 (새 항목이 추가돼도 안전) */

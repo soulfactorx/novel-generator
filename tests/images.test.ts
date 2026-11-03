@@ -76,6 +76,23 @@ describe("프롬프트", () => {
     expect(sys).toContain("{{img::이름}}");
     expect(sys).not.toContain("main");
   });
+  test("그림 자주 쓰기: 봇 규칙이 있으면 매 응답 그림 하나, 없으면 매 응답 1개", () => {
+    const own = char({ profile: '장면마다 <img="장소이름">을 출력한다.' });
+    const p1 = imagePool({ characters: [own] }, [img("i1", "항구")]);
+    expect(imagePromptSection({ characters: [own] }, p1, "chat", true).join("\n")).toContain("매 응답마다 그 인물의 그림 표시를 적어도 하나");
+    expect(imagePromptSection({ characters: [own] }, p1, "chat", false).join("\n")).toContain("장면에 맞을 때");
+    const plain = char();
+    const p2 = imagePool({ characters: [plain] }, [img("i1", "항구")]);
+    expect(imagePromptSection({ characters: [plain] }, p2, "chat", true).join("\n")).toContain("매 응답마다 1개");
+  });
+  test("봇 Lua가 선택지를 직접 만들면 이 앱의 [선택지] 지시를 빼서 출력 형식이 부딪히지 않게", () => {
+    const s = { ...DEFAULT_SETTINGS, choices: true };
+    const plain = char();
+    expect(buildSystemPrompt(s, room, { characters: [plain] })).toContain("## 선택지");
+    const bot = char({ risu: { triggers: [{ type: "start", effect: [{ type: "triggerlua", code: "function DMT.Choice.handle(id) end" }] }] } });
+    expect(buildSystemPrompt(s, room, { characters: [bot] })).not.toContain("## 선택지");
+    expect(buildSystemPrompt({ ...s, risu: { ...s.risu, lua: false } }, room, { characters: [bot] })).toContain("## 선택지");
+  });
   test("감정 이미지 모드: 응답 끝에 <Emotion=\"이름\">", () => {
     const c = char({ emotionMode: true });
     const pool = imagePool({ characters: [c] }, [img("i1", "기쁨", "emotion"), img("i2", "슬픔", "emotion")]);

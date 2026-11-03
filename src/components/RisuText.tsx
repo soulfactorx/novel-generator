@@ -1,4 +1,5 @@
-import { useEffect, useId, useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { rememberControl, restoreControls } from "../lib/uiMemory";
 import { hasMarkup, poolIsEmpty, renderRisu, sanitizeHtml, type ImagePool } from "../lib/images";
 import { useImageUrls } from "../lib/imageUrls";
 import { inlineMarkdown } from "../lib/markdown";
@@ -40,7 +41,20 @@ export default function RisuText({ text: raw, pool, cbs, onTrigger, luaDisplay }
   useEffect(() => {
     if (bgmUrl) playBgm(bgmUrl);
   }, [bgmUrl]);
-  if (html === null || !hasMarkup(html)) return <StoryText text={html ?? text} />;
+  const clean = html !== null && hasMarkup(html) ? sanitizeHtml(tidy(html), urls, scope) : null;
+  // 봇 화면의 탭 접기 등: 새로 그려도 마지막으로 고른 상태 유지
+  const box = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (box.current) restoreControls(box.current);
+  }, [clean]);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const onChange = (e: Event) => rememberControl(e.target as Element, el); // React 밖에서 만든 입력이라 직접 듣는다
+    el.addEventListener("change", onChange);
+    return () => el.removeEventListener("change", onChange);
+  }, [clean === null]);
+  if (clean === null) return <StoryText text={html ?? text} />;
   const click = (e: MouseEvent) => {
     const el = (e.target as HTMLElement).closest("[risu-trigger],[risu-btn]") as HTMLElement | null;
     if (!el || !onTrigger) return;
@@ -62,7 +76,7 @@ export default function RisuText({ text: raw, pool, cbs, onTrigger, luaDisplay }
     }
     onTrigger(`__form:${name}`, null, { data });
   };
-  return <div className={`story risu-html whitespace-pre-wrap ${scope}`} onClick={click} onSubmitCapture={submit} dangerouslySetInnerHTML={{ __html: sanitizeHtml(tidy(html), urls, scope) }} />;
+  return <div ref={box} className={`story risu-html whitespace-pre-wrap ${scope}`} onClick={click} onSubmitCapture={submit} dangerouslySetInnerHTML={{ __html: clean }} />;
 }
 
 /** 그림은 블록으로 보이므로 앞뒤 빈 줄을 줄인다 (pre-wrap에서 빈 공간이 커지지 않게) */

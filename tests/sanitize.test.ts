@@ -28,3 +28,10 @@ test("봇의 고정 위치·화면 단위는 이야기 화면 기준으로", () 
   expect(out).toContain("width:calc(100cqw - 76px)");
   expect(out).not.toContain("https://x");
 });
+
+test("값 없는 속성(checked·open·controls)은 남긴다", () => {
+  const out = sanitizeHtml('<input type="radio" name="g" checked data-x><details open><summary>s</summary>b</details><audio src="nvimg:a" controls loop></audio>', { a: "blob:x/1" });
+  expect(out).toContain('<input type="radio" name="g" checked="" data-x="">');
+  expect(out).toContain("<details open=");
+  expect(out).toMatch(/<audio src="blob:x\/1" controls="" loop="">/);
+});
