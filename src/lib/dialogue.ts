@@ -25,6 +25,8 @@ export function splitDialogue(text: string): { text: string; quote?: boolean }[]
   return out;
 }
 
+/** 봇이 만든 화면 블록(class 가 붙은 요소: 상태창·버튼·안내 문구 등)은 이야기 본문이 아니므로 대사 색을 넣지 않는다 */
+const isBotUi = (el: Element) => el.hasAttribute("class") && !el.classList.contains("dlg");
 const SKIP = new Set(["STYLE", "SCRIPT", "CODE", "PRE", "BUTTON", "LABEL", "OPTION", "SELECT", "TEXTAREA", "SUMMARY"]);
 /** HTML(정리된 봇 화면): 글자 노드 안의 대사를 <span class="dlg"> 로 감싼다 (버튼·코드 등은 그대로) */
 export function colorizeHtml(html: string): string {
@@ -39,7 +41,7 @@ export function colorizeHtml(html: string): string {
       if (c.nodeType === 3) {
         nodes.push({ node: c as Text, start: text.length });
         text += (c as Text).data;
-      } else if (c.nodeType === 1 && !SKIP.has((c as Element).tagName)) {
+      } else if (c.nodeType === 1 && !SKIP.has((c as Element).tagName) && !isBotUi(c as Element)) {
         const block = /^(P|DIV|SECTION|ARTICLE|LI|TR|H[1-6]|BLOCKQUOTE|BR|ASIDE|DETAILS)$/.test((c as Element).tagName);
         if (block) text += "\n";
         walk(c);

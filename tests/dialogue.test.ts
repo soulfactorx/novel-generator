@@ -17,3 +17,9 @@ test("HTML: 여러 글자 노드에 걸친 대사도 감싸고, 버튼·코드 �
   expect(out).toContain('<code>"x"</code>');
   expect(colorizeHtml("<p>대사 없음</p>")).toBe("<p>대사 없음</p>");
 });
+
+test("봇 화면 블록(class 있는 요소) 안의 글자는 대사 색을 넣지 않는다", () => {
+  const out = colorizeHtml('<div class="rn-panel-head">「이 설정으로 시작」을 누르세요</div>\n"본문 대사."');
+  expect(out).toContain('<div class="rn-panel-head">「이 설정으로 시작」을 누르세요</div>');
+  expect(out).toContain('<span class="dlg">"본문 대사."</span>');
+});

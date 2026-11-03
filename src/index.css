@@ -36,7 +36,7 @@ body {
 .para-gap { display: block; height: 0.55em; }
 /* RisuAI 봇의 그림·표시 HTML */
 /* 그림: 봇이 class로 스타일을 정한 그림은 봇 CSS를 그대로 따르고(넘치지만 않게), 이 앱이 넣은 그림·스타일 없는 그림만 기본 모양 */
-:where(.risu-html) img { max-width: 100%; }
+:where(.risu-html) img { max-width: 100%; max-height: 70vh; object-fit: contain; } /* 봇이 높이·맞춤을 정하면 봇 CSS가 우선 (우선순위 0) */
 :where(.risu-html) :where(img.risu-img, img:not([class])) { display: block; max-width: min(100%, 30rem); max-height: 65vh; margin: 0.75rem auto; border-radius: 0.75rem; object-fit: contain; cursor: zoom-in; }
 .risu-html table { border-collapse: collapse; }
 .risu-html td, .risu-html th { border: 1px solid rgb(120 113 108 / 0.3); padding: 0.25rem 0.5rem; }
