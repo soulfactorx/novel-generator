@@ -17,7 +17,7 @@ export default function NovelView({ onMenu, onOpenLibrary, onOpenSettings }: { o
   const novel = useApp((s) => (s.activeNovelId ? s.novels[s.activeNovelId] : null));
   const live = useApp((s) => s.novelLive);
   const error = useApp((s) => s.novelError);
-  const width = useApp((s) => s.settings.contentWidth);
+  const width = useApp((s) => s.settings.readWidth);
   const [tab, setTab] = useState<Tab>("plan");
   const [reading, setReading] = useState<number | null>(null);
   const novelId = novel?.id;
@@ -74,7 +74,7 @@ export default function NovelView({ onMenu, onOpenLibrary, onOpenSettings }: { o
         </div>
       )}
       <div className="flex-1 overflow-y-auto">
-        <div className={`content-width mx-auto px-4 py-5 lg:px-8 ${width === "comfort" ? "comfort" : ""}`}>
+        <div className={`content-width mx-auto px-4 py-5 lg:px-8 cw-${width}`}>
           {tab === "plan" && <PlanTab novel={novel} onOpenLibrary={onOpenLibrary} onNext={() => setTab("outline")} />}
           {tab === "outline" && <OutlineTab novel={novel} live={mine?.task === "outline" ? mine : null} busy={!!live} onWrite={() => setTab("manuscript")} />}
           {tab === "manuscript" &&

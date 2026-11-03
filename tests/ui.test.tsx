@@ -57,8 +57,8 @@ test("library: create world + character, start a story from it", async () => {
   expect(w).toMatchObject({ name: "레인포트" });
   expect((w as any).lore[0].keys).toEqual(["조합", "길드"]);
   await act(async () => byText(/세계관/)!.click());
-  await act(async () => [...document.querySelectorAll("button")].find((b) => b.textContent?.startsWith("레인포트"))!.click());
-  await act(async () => byText("이 설정으로 새 이야기")!.click());
+  await act(async () => [...document.querySelectorAll("button")].find((b) => b.textContent?.includes("레인포트") && !b.textContent.includes("+"))!.click());
+  await act(async () => byText("✒️ 새 이야기")!.click());
   const room = getState().rooms[getState().activeRoomId!];
   expect(room.worldId).toBe(w.id);
   expect(room.characterIds).toHaveLength(1);

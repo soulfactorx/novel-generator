@@ -107,7 +107,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
             🧭 <span><b>봇 시작 설정</b><span className="hint block">이 봇은 시작하기 전에 고를 설정이 있습니다. 눌러서 설정하세요.</span></span>
           </button>
         )}
-        <div className={`content-width mx-auto space-y-6 px-4 py-6 lg:pl-8 lg:pr-16 ${settings.contentWidth === "comfort" ? "comfort" : ""}`}>
+        <div className={`content-width mx-auto space-y-6 px-4 py-6 lg:pl-8 lg:pr-16 cw-${settings.readWidth}`}>
           {room.branchOf && (
             <div className="text-xs text-stone-500">
               ⑂ {rooms[room.branchOf.roomId] ? <button className="underline" onClick={() => selectRoom(room.branchOf!.roomId)}>'{rooms[room.branchOf.roomId].title}'</button> : `'${room.branchOf.title}'`}에서 분기한 이야기입니다.
@@ -190,7 +190,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
       <EmotionPanel messages={room.messages} pool={pool} cbsFor={(id) => displayCbs(room, id)} />
       </div>
       <div className="border-t border-stone-200 bg-stone-50/90 p-3 backdrop-blur dark:border-stone-800 dark:bg-stone-950/90">
-        <div className={`content-width mx-auto flex items-end gap-2 lg:px-4 ${settings.contentWidth === "comfort" ? "comfort" : ""}`}>
+        <div className={`content-width mx-auto flex items-end gap-2 lg:px-4 cw-${settings.readWidth}`}>
           <textarea
             className="input max-h-48 min-h-11 flex-1 resize-none"
             rows={2}
