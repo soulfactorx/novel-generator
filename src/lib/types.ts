@@ -34,6 +34,7 @@ export interface Settings {
   coverModel: string; // AI 표지 그림 모델 (Gemini)
   /** RisuAI 호환 기능 켜고 끄기 */
   risu: RisuOptions;
+  prompts: Record<string, string>; // 설정 → 프롬프트에서 바꾼 문구 (id → 문구, 바꾼 것만)
 }
 
 /** 메시지·회차에 붙는 사용량 (usd: 단가를 아는 경우) */
@@ -210,6 +211,7 @@ export const DEFAULT_SETTINGS: Settings = {
   customPrices: {},
   coverModel: "gemini-nano-banana-2.1",
   risu: { cbs: true, scripts: true, triggers: true, lua: true, background: true, markdown: true, imageEveryTurn: true },
+  prompts: {},
 };
 
 export interface RisuOptions {
@@ -234,6 +236,7 @@ export function normalizeSettings(raw: unknown): Settings {
     fallback: { ...DEFAULT_SETTINGS.fallback, ...(r.fallback || {}) },
     risu: { ...DEFAULT_SETTINGS.risu, ...(r.risu || {}) },
     customPrices: r.customPrices && typeof r.customPrices === "object" ? r.customPrices : {},
+    prompts: Object.fromEntries(Object.entries(r.prompts && typeof r.prompts === "object" ? r.prompts : {}).filter(([, v]) => typeof v === "string")) as Record<string, string>,
     version: 1,
   };
   // 성인 확인 없이 adult 로 저장될 수 없음

@@ -1,4 +1,5 @@
-import { RATING_POLICY } from "./prompt";
+import { ratingText } from "./prompt";
+import { P } from "./prompts";
 import type { ChatMessage } from "./providers";
 import type { Message, Room, Settings } from "./types";
 
@@ -29,23 +30,9 @@ export function pendingForMemory(room: Room, contextMessages: number, mode: "aut
 
 export function buildMemoryRequest(s: Settings, room: Room, pending: Message[], names: { user?: string } = {}): { system: string; messages: ChatMessage[] } {
   const who = names.user || "주인공";
-  const log = pending.map((m) => (m.role === "user" ? `[${who}(사용자)] ${m.text}` : `[이야기] ${m.text}`)).join("\n\n");
-  const system = [
-    "너는 연재 소설의 편집자다. 작가가 다음 회를 쓸 때 참고할 '지금까지의 줄거리 요약'을 관리한다.",
-    "기존 요약에 새로 진행된 내용을 합쳐, 갱신된 요약 전체를 다시 쓴다.",
-    "",
-    "## 작성 규칙",
-    "- 한국어, 건조한 사실 위주. 문학적 수식과 대사 인용은 줄인다.",
-    "- 아래 네 항목 순서로, 각 항목은 '- '로 시작하는 짧은 줄로 쓴다.",
-    "  1) 주요 사건 (시간 순, 오래된 일은 더 짧게 압축)",
-    "  2) 인물 상태와 관계 변화",
-    "  3) 아직 풀리지 않은 일 · 약속 · 복선",
-    "  4) 현재 상황 (장소, 시간, 직전 장면)",
-    `- 전체 ${MEMORY_MAX_CHARS.toLocaleString()}자 이내. 넘치면 오래된 사건부터 압축한다.`,
-    "- 요약만 출력한다. 머리말이나 설명을 붙이지 않는다.",
-    `- ${RATING_POLICY[s.contentRating]} 요약에서는 성적·폭력적 장면도 무슨 일이 있었는지만 간단히 적는다.`,
-  ].join("\n");
-  const user = [`## 기존 요약\n${room.memory.trim() || "(없음)"}`, `## 이어서 진행된 내용\n${log}`, "위 내용을 반영해 갱신된 요약 전체를 작성하라."].join("\n\n");
+  const log = pending.map((m) => (m.role === "user" ? P("memory.userLine", { 이름: who, 내용: m.text }) : P("memory.storyLine", { 내용: m.text }))).join("\n\n");
+  const system = P("memory.system", { 최대글자: MEMORY_MAX_CHARS.toLocaleString(), 수위: ratingText(s.contentRating) });
+  const user = P("memory.user", { 기존: room.memory.trim() || P("memory.none"), 내용: log });
   return { system, messages: [{ role: "user", content: user }] };
 }
 

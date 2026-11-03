@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { readSSE } from "../src/lib/sse";
 import { previewText, splitChoices } from "../src/lib/choices";
-import { buildHistory, buildSystemPrompt, RATING_POLICY } from "../src/lib/prompt";
+import { buildHistory, buildSystemPrompt, ratingText } from "../src/lib/prompt";
 import { DEFAULT_SETTINGS, normalizeSettings, type Room } from "../src/lib/types";
 import { parseLegacyBackup } from "../src/lib/importLegacy";
 import { apiRoot } from "../src/lib/providers/openai";
@@ -48,7 +48,7 @@ describe("settings & content rating", () => {
   });
   test("system prompt includes rating policy, style, premise, memory, choices", () => {
     const p = buildSystemPrompt({ ...DEFAULT_SETTINGS }, room({ premise: "항구 도시", memory: "첫 만남" }));
-    expect(p).toContain(RATING_POLICY.general);
+    expect(p).toContain(ratingText("general"));
     expect(p).toContain("항구 도시");
     expect(p).toContain("첫 만남");
     expect(p).toContain("[선택지]");

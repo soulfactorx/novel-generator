@@ -5,6 +5,7 @@
  *  - 에셋 표시 {{img|image|asset|emotion|raw|path::이름}} 를 실제 그림으로 바꾼다. (이름이 조금 달라도 가장 비슷한 에셋)
  * 원본: RisuAI src/ts/process/scripts.ts · parser.svelte.ts 의 동작을 이 앱에 맞게 다시 구현
  */
+import { P } from "./prompts";
 import type { StoryContext } from "./prompt";
 import type { ImageMeta, RegexScript } from "./types";
 
@@ -417,26 +418,14 @@ export function hasOwnImageRules(ctx: StoryContext, pool: ImagePool): boolean {
 export function imagePromptSection(ctx: StoryContext, pool: ImagePool, mode: "chat" | "novel", everyTurn = false): string[] {
   const out: string[] = [];
   const own = hasOwnImageRules(ctx, pool);
-  if (own) out.push("", "## 그림 사용", mode === "chat" ? (everyTurn ? "설정에 정해진 그림 표시 규칙(태그 형식·이름)을 지켜서 그림 표시를 쓴다. 그림이 있는 인물이 장면에 나오면, 빈도에 관한 다른 지시보다 우선해 매 응답마다 그 인물의 그림 표시를 적어도 하나 넣는다." : "설정에 정해진 그림 표시 규칙(태그 형식·이름)을 지켜서, 장면에 맞을 때 그림 표시를 쓴다.") : "설정에 정해진 그림 표시 규칙(태그 형식·이름)을 소설 원고에서도 지킨다. 그림 표시는 해당 장면의 문단 바로 다음에 별도 줄로 쓰고, 한 회차에 너무 많이 넣지 않는다.");
+  if (own) out.push("", P(mode === "novel" ? "image.own.novel" : everyTurn ? "image.own.chatEvery" : "image.own.chat"));
   else if (pool.assets.length) {
     const names = pool.assets.filter((m) => m.kind !== "icon").map((m) => m.name);
-    if (names.length)
-      out.push(
-        "",
-        "## 그림 사용",
-        `장면·인물·장소에 잘 맞는 그림이 아래 목록에 있으면, 해당 문단 바로 다음에 {{img::이름}} 한 줄을 따로 쓴다. 이름은 목록과 똑같이 쓰고, ${mode === "chat" ? (everyTurn ? "매 응답마다 1개" : "한 응답에 1개 이하") : "한 회차에 3개 이하"}로, 어울리는 그림이 없으면 쓰지 않는다.`,
-        `그림 목록: ${names.slice(0, 150).join(", ")}`,
-      );
+    if (names.length) out.push("", P("image.list", { 빈도: P(mode === "novel" ? "image.freq.novel" : everyTurn ? "image.freq.chatEvery" : "image.freq.chat"), 목록: names.slice(0, 150).join(", ") }));
   }
   if (pool.emotionMode && pool.emotions.length) {
     const list = [...new Set(pool.emotions.map((m) => m.name))].slice(0, 150).join(", ");
-    out.push(
-      "",
-      "## 감정 이미지",
-      mode === "chat"
-        ? `응답 맨 끝에, 이번 응답에서 인물의 감정에 맞는 감정 이미지를 <Emotion="이름"> 형식으로 하나 쓴다. 이름은 목록에서만 고르고, 앞선 응답과 같은 것만 반복하지 않는다. 목록: ${list}`
-        : `인물의 감정이 크게 드러나는 장면에서는 그 문단 바로 다음 줄에 <Emotion="이름"> 을 쓸 수 있다(한 회차에 3개 이하). 이름은 목록에서만 고른다. 목록: ${list}`,
-    );
+    out.push("", P(mode === "chat" ? "image.emotion.chat" : "image.emotion.novel", { 목록: list }));
   }
   return out;
 }

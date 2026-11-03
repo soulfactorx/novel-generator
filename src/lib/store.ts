@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { CHOICE_MARKER, previewText, splitChoices } from "./choices";
-import { deleteKV, getImageData, loadAll, putImages, putKV, putRecords, requestPersist } from "./db";
+import { deleteKV, getImageData, loadAll, putImages, putKV, putRecords, requestPersist, wipeDatabase } from "./db";
 import { imagePool, imagePromptSection, runScripts, shrinkImage, sniffMedia, uniqueName, type ImagePool } from "./images";
 import { uid } from "./id";
 import { libraryFromExtra, type LegacyImport } from "./importLegacy";
@@ -8,7 +8,8 @@ import { greetingRoom, type RisuImage, type RisuImport } from "./risu";
 import { buildEnv, cbs, chatIndexOf, processContext, processMessages, type EnvInput } from "./risuRuntime";
 import { formatLore, matchLore, type LoreHit } from "./lore";
 import { buildMemoryRequest, cleanMemory, pendingForMemory } from "./memory";
-import { buildHistory, buildSystemPrompt, instructionsOf, outputTokensFor, type StoryContext } from "./prompt";
+import { botHandlesChoices, buildHistory, buildSystemPrompt, instructionsOf, outputTokensFor, type StoryContext } from "./prompt";
+import { P, setPromptOverrides } from "./prompts";
 import { generate, ProviderError, type GenerateRequest, type GenerateResult, type Usage } from "./providers";
 import { emptyUsage, recordUsage, type UsageData, type UsageKind } from "./usage";
 import { buildEpisodeDiagnosis, buildRoomDiagnosis, splitDiagnosis } from "./diagnose";
@@ -49,6 +50,7 @@ export interface AppState {
   globals: Record<string, string>; // RisuAI 전역 변수 (토글: toggle_키) — 이 기기에 저장
   risuDialog: RisuDialog | null; // 봇(Lua·트리거)이 띄운 알림·입력 창
   risuTick: number; // 봇이 화면 다시 그리기를 요청할 때 증가
+  lastRequest: LastRequest | null; // 마지막으로 AI에게 보낸 요청 (설정 → 프롬프트에서 확인, 저장하지 않음)
 }
 export type RisuDialog =
   | { kind: "normal" | "error"; message: string; resolve: () => void }
@@ -87,7 +89,7 @@ export interface NovelLive {
   startedAt: number;
 }
 
-let state: AppState = { ready: false, storageError: "", settings: DEFAULT_SETTINGS, rooms: {}, library: {}, activeRoomId: null, live: null, memoryJob: null, lastUsage: null, legacyExtra: null, view: "rooms", novels: {}, activeNovelId: null, novelLive: null, novelError: null, usage: emptyUsage(), sync: { connected: false, auto: false, encrypted: false, running: false }, images: {}, globals: {}, risuDialog: null, risuTick: 0 };
+let state: AppState = { ready: false, storageError: "", settings: DEFAULT_SETTINGS, rooms: {}, library: {}, activeRoomId: null, live: null, memoryJob: null, lastUsage: null, legacyExtra: null, view: "rooms", novels: {}, activeNovelId: null, novelLive: null, novelError: null, usage: emptyUsage(), sync: { connected: false, auto: false, encrypted: false, running: false }, images: {}, globals: {}, risuDialog: null, risuTick: 0, lastRequest: null };
 const subs = new Set<() => void>();
 const dirty = { rooms: new Set<string>(), library: new Set<string>(), novels: new Set<string>() };
 const deleted = { rooms: new Set<string>(), library: new Set<string>(), novels: new Set<string>() };
@@ -122,7 +124,9 @@ let controller: AbortController | null = null;
 
 export const getState = () => state;
 export function setState(patch: Partial<AppState> | ((s: AppState) => Partial<AppState>)) {
+  const prevPrompts = state.settings.prompts;
   state = { ...state, ...(typeof patch === "function" ? patch(state) : patch) };
+  if (state.settings.prompts !== prevPrompts) setPromptOverrides(state.settings.prompts); // 설정 → 프롬프트에서 바꾼 문구
   subs.forEach((f) => f());
 }
 export const subscribe = (f: () => void) => (subs.add(f), () => void subs.delete(f));
@@ -666,6 +670,24 @@ export async function runLuaEdit<T>(room: Room, type: "editInput" | "editOutput"
   return v;
 }
 
+/** 브라우저에 영구 저장 요청 (설정 → 저장소) */
+export const requestPersistNow = () => requestPersist();
+/** 봇 전역 변수(토글 값 포함) 모두 지우기 */
+export function clearGlobals() {
+  setState({ globals: {} });
+  void putKV("risuGlobals", {}).catch(() => {});
+}
+/** 이 앱의 모든 로컬 데이터 삭제 후 새로 시작 (IndexedDB 전체 + 이 앱의 localStorage 항목) */
+export async function resetAllData() {
+  await wipeDatabase();
+  try {
+    localStorage.removeItem("risuUiState");
+  } catch {
+    /* 무시 */
+  }
+  location.reload();
+}
+
 /** 전역 변수 (토글은 toggle_키) */
 export function setGlobal(key: string, value: string) {
   setState((st) => ({ globals: { ...st.globals, [key]: value } }));
@@ -706,7 +728,14 @@ export interface AIResult extends GenerateResult {
  *   (인증·요청 오류·거절은 대체하지 않음 — 거절을 다른 모델로 우회하지 않는다)
  * - 응답마다 사용량·비용 기록
  */
+export interface LastRequest {
+  kind: UsageKind;
+  at: number;
+  system: string;
+  messages: { role: string; content: string }[];
+}
 export async function callAI(kind: UsageKind, req: Omit<GenerateRequest, "settings">, opts: { settings?: Settings; onRestart?: () => void } = {}): Promise<AIResult> {
+  setState({ lastRequest: { kind, at: Date.now(), system: req.system, messages: req.messages.map((m) => ({ role: m.role, content: typeof m.content === "string" ? m.content : JSON.stringify(m.content) })) } });
   const s = opts.settings ?? state.settings;
   const fb = s.fallback;
   const record = (provider: Settings["provider"], res: GenerateResult): MessageUsage | undefined => {
@@ -787,24 +816,24 @@ async function runGeneration(roomId: string, note = "") {
   const procCbs = useCbs ? cbsFor(room, { rmVar: true }) : undefined;
   // 봇의 프롬프트 스크립트(editprocess): AI에게 보내는 대화만 바꾸고 저장된 대화는 그대로
   const history = buildHistory(roomP, s.contextMessages).map((h) => ({ ...h, content: runScripts(h.content, pool.scripts, "editprocess", procCbs).text }));
-  if (!history.length) history.push({ role: "user", content: "이야기를 시작해 주세요." });
+  if (!history.length) history.push({ role: "user", content: P("chat.start") });
   // 로어북은 시스템 프롬프트가 아니라 마지막 입력에 붙인다 → 앞부분이 고정돼 프롬프트 캐시가 유지됨
   const lore = loreFor(roomP, ctx);
   if (lore.length) {
     const last = history[history.length - 1];
-    history[history.length - 1] = { ...last, content: `${last.content}\n\n<참고 설정: 이번 장면과 관련된 자료. 필요한 만큼만 자연스럽게 반영하고 그대로 옮겨 쓰지 말 것>\n${formatLore(lore)}\n</참고 설정>` };
+    history[history.length - 1] = { ...last, content: `${last.content}\n\n${P("chat.lore", { 내용: formatLore(lore) })}` };
   }
   // 설정의 응답 직전 지시 (RisuAI post_history_instructions): 마지막 입력 뒤에 붙인다
   const instr = instructionsOf(ctx);
   if (instr) {
     const last = history[history.length - 1];
     // 봇 지시가 '응답 맨 끝'을 요구하는 경우가 많아(상태창 등) 선택지와 순서를 정해 준다
-    const order = s.choices ? `\n\n<출력 순서: 위 설정 지시가 요구하는 출력(상태창 등)을 모두 쓴 다음, 응답의 맨 마지막에 "${CHOICE_MARKER}" 블록(번호 붙인 다음 행동 4가지)을 반드시 붙인다.>` : "";
-    history[history.length - 1] = { ...last, content: `${last.content}\n\n<설정 지시: 이번 응답에서 반드시 따를 것>\n${instr}\n</설정 지시>${order}` };
+    const order = s.choices && !(s.risu.lua && botHandlesChoices(ctx)) ? `\n\n${P("chat.choiceOrder", { 표시: CHOICE_MARKER })}` : "";
+    history[history.length - 1] = { ...last, content: `${last.content}\n\n${P("chat.instructions", { 내용: instr })}${order}` };
   }
   if (note.trim()) {
     const last = history[history.length - 1];
-    history[history.length - 1] = { ...last, content: `${last.content}\n\n<작가 지시: 이번 응답에 반영할 것>\n${note.trim()}\n</작가 지시>` };
+    history[history.length - 1] = { ...last, content: `${last.content}\n\n${P("chat.note", { 내용: note.trim() })}` };
   }
   // 봇 트리거의 시스템 프롬프트 추가 (위치: 맨 앞 / 대화 기록 끝 / 프롬프트 끝)
   const sp = started.systemPrompt;
