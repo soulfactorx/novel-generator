@@ -1,7 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { rememberControl, restoreControls } from "../lib/uiMemory";
 import { colorizeHtml } from "../lib/dialogue";
-import { useSpeakers } from "./Speakers";
 import { hasMarkup, poolIsEmpty, renderRisu, sanitizeHtml, type ImagePool } from "../lib/images";
 import { useImageUrls } from "../lib/imageUrls";
 import { inlineMarkdown } from "../lib/markdown";
@@ -43,9 +42,9 @@ export default function RisuText({ text: raw, pool, cbs, onTrigger, luaDisplay }
   useEffect(() => {
     if (bgmUrl) playBgm(bgmUrl);
   }, [bgmUrl]);
-  const speakers = useSpeakers();
+  const dialogueColor = useApp((s) => s.settings.dialogueColors);
   const safe = html !== null && hasMarkup(html) ? sanitizeHtml(tidy(html), urls, scope) : null;
-  const clean = safe !== null && speakers ? colorizeHtml(safe, speakers) : safe; // 화자별 대사 색
+  const clean = safe !== null && dialogueColor ? colorizeHtml(safe) : safe; // 대사 색
   // 봇 화면의 탭 접기 등: 새로 그려도 마지막으로 고른 상태 유지
   const box = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {

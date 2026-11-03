@@ -159,7 +159,6 @@ function CharacterForm({ c, worlds, onStart }: { c: Character; worlds: World[]; 
         </F>
       </div>
       <F label="한 줄 소개"><input className="input" value={c.summary} onChange={(e) => up({ summary: e.target.value })} placeholder="예) 29세 · 조합 감찰관" aria-label="한 줄 소개" /></F>
-      <SpeakerFields color={c.color} aliases={c.aliases} onChange={up} />
       <F label="프로필" hint="외모, 성격, 배경, 다른 인물과의 관계, 숨겨진 비밀 등">
         <textarea className="input min-h-36" value={c.profile} onChange={(e) => up({ profile: e.target.value })} aria-label="프로필" />
       </F>
@@ -182,27 +181,9 @@ function PersonaForm({ p }: { p: Persona }) {
   return (
     <>
       <F label="이름"><input className="input" value={p.name} onChange={(e) => up({ name: e.target.value })} aria-label="주인공 이름" /></F>
-      <SpeakerFields color={p.color} aliases={p.aliases} onChange={up} />
       <F label="주인공 소개" hint="AI가 다른 인물의 반응을 쓸 때 참고합니다. 나이, 외모, 직업, 처지 등">
         <textarea className="input min-h-36" value={p.profile} onChange={(e) => up({ profile: e.target.value })} aria-label="주인공 소개" />
       </F>
     </>
-  );
-}
-
-/** 대사 색 · 다른 이름 (화자별 대사 색에 씀) */
-function SpeakerFields({ color, aliases, onChange }: { color?: string; aliases?: string; onChange: (p: { color?: string; aliases?: string }) => void }) {
-  return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      <F label="대사 색" hint="본문에서 이 인물의 대사에 쓰는 색. 비워 두면 자동으로 정합니다.">
-        <div className="flex items-center gap-2">
-          <input type="color" className="h-9 w-12 cursor-pointer rounded border border-stone-300 bg-transparent dark:border-stone-700" value={color ?? "#3b6fd4"} onChange={(e) => onChange({ color: e.target.value })} aria-label="대사 색" />
-          {color ? <button className="btn-ghost text-xs" onClick={() => onChange({ color: undefined })}>자동으로</button> : <span className="hint text-xs">자동</span>}
-        </div>
-      </F>
-      <F label="다른 이름 (선택)" hint="본문에서 이 인물을 부르는 다른 이름. 쉼표로 구분 (대사 화자 찾기에 씀)">
-        <input className="input" value={aliases ?? ""} onChange={(e) => onChange({ aliases: e.target.value })} placeholder="예) 검후, 사부" aria-label="다른 이름" />
-      </F>
-    </div>
   );
 }

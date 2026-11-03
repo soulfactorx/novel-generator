@@ -33,6 +33,13 @@ export default function App() {
     return () => mq?.removeEventListener?.("change", apply);
   }, [theme]);
 
+  // 설정에서 고른 대사 색
+  const dialogueColor = useApp((s) => s.settings.dialogueColor);
+  useEffect(() => {
+    if (dialogueColor) document.documentElement.style.setProperty("--dlg-user", dialogueColor);
+    else document.documentElement.style.removeProperty("--dlg-user");
+  }, [dialogueColor]);
+
   if (!ready) return <div className="grid h-full place-items-center text-sm text-stone-500">불러오는 중…</div>;
   return (
     <div className="flex h-full">

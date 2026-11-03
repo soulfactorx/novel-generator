@@ -35,7 +35,9 @@ export interface Settings {
   /** RisuAI 호환 기능 켜고 끄기 */
   risu: RisuOptions;
   prompts: Record<string, string>; // 설정 → 프롬프트에서 바꾼 문구 (id → 문구, 바꾼 것만)
-  dialogueColors: boolean; // 화자별 대사 색
+  dialogueColors: boolean; // 대사(따옴표)를 다른 색으로
+  dialogueColor: string; // 대사 색 (#rrggbb, 빈 값이면 기본 색)
+  contentWidth: "fit" | "comfort"; // 본문 폭: 화면에 맞춤 · 읽기 좋은 폭
 }
 
 /** 메시지·회차에 붙는 사용량 (usd: 단가를 아는 경우) */
@@ -128,14 +130,10 @@ export interface Character extends EntityBase {
   risu?: RisuExtras;
   source?: PackageSource; // 가져온 패키지 정보 (RisuAI charx 등)
   emotionMode?: boolean; // RisuAI '감정 이미지' 화면: AI가 응답마다 <Emotion="이름">으로 감정 이미지를 고름
-  color?: string; // 대사 색 (#rrggbb, 없으면 자동)
-  aliases?: string; // 대사 화자를 찾을 때 쓰는 다른 이름 (쉼표로 구분)
 }
 export interface Persona extends EntityBase {
   kind: "persona";
   profile: string; // 사용자가 연기하는 주인공
-  color?: string; // 대사 색
-  aliases?: string; // 다른 이름
 }
 export type Entity = World | Character | Persona;
 
@@ -218,6 +216,8 @@ export const DEFAULT_SETTINGS: Settings = {
   risu: { cbs: true, scripts: true, triggers: true, lua: true, background: true, markdown: true, imageEveryTurn: true },
   prompts: {},
   dialogueColors: true,
+  dialogueColor: "",
+  contentWidth: "fit",
 };
 
 export interface RisuOptions {
@@ -250,6 +250,8 @@ export function normalizeSettings(raw: unknown): Settings {
   s.temperature = Math.min(1, Math.max(0, Number(s.temperature) || 0));
   s.monthlyBudget = Math.max(0, Number(s.monthlyBudget) || 0);
   s.krwPerUsd = Math.max(0, Number(s.krwPerUsd) || 0);
+  if (s.contentWidth !== "comfort") s.contentWidth = "fit";
+  if (typeof s.dialogueColor !== "string" || !/^#[0-9a-f]{6}$/i.test(s.dialogueColor)) s.dialogueColor = "";
   s.readerFontSize = Math.min(28, Math.max(13, Math.round(Number(s.readerFontSize) || 18)));
   s.contextMessages = Math.min(400, Math.max(4, Math.round(Number(s.contextMessages) || 40)));
   return s;

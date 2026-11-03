@@ -186,7 +186,16 @@ function WritingTab() {
       <Field label={`AI에게 보내는 최근 메시지 수: ${s.contextMessages}`} hint="많을수록 앞 내용을 잘 기억하지만 비용이 늘어납니다. 이보다 오래된 대화는 장기 기억으로 정리됩니다.">
         <input type="range" min={10} max={200} step={10} value={s.contextMessages} onChange={(e) => updateSettings({ contextMessages: Number(e.target.value) })} className="w-full accent-violet-600" />
       </Field>
-      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={s.dialogueColors} onChange={(e) => updateSettings({ dialogueColors: e.target.checked })} /> 화자별 대사 색 (인물마다 대사를 다른 색으로, 색은 라이브러리에서 고를 수 있음)</label>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <label className="flex items-center gap-2"><input type="checkbox" checked={s.dialogueColors} onChange={(e) => updateSettings({ dialogueColors: e.target.checked })} /> 대사 색 (따옴표 대사를 일반 글과 다른 색으로)</label>
+        {s.dialogueColors && (
+          <>
+            <input type="color" className="h-7 w-10 cursor-pointer rounded border border-stone-300 bg-transparent dark:border-stone-700" value={s.dialogueColor || "#2f5fa8"} onChange={(e) => updateSettings({ dialogueColor: e.target.value })} aria-label="대사 색" />
+            {s.dialogueColor ? <button className="btn-ghost px-2 py-0.5 text-xs" onClick={() => updateSettings({ dialogueColor: "" })}>기본 색으로</button> : <span className="hint text-xs">기본 색 (밝게·어둡게 화면에 맞춤)</span>}
+          </>
+        )}
+      </div>
+      <Field label="본문 폭"><Choice value={s.contentWidth} onChange={(contentWidth) => updateSettings({ contentWidth })} options={[["fit", "화면에 맞춤"], ["comfort", "읽기 좋은 폭 (좁게)"]]} /></Field>
       <Field label="화면 테마"><Choice value={s.theme} onChange={(theme) => updateSettings({ theme })} options={[["system", "시스템"], ["light", "밝게"], ["dark", "어둡게"]]} /></Field>
     </div>
   );
