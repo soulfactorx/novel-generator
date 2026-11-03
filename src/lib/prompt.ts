@@ -1,3 +1,4 @@
+import { T } from "./tuning";
 import type { Character, ContentRating, Persona, Room, Settings, StyleOptions, World } from "./types";
 import { P } from "./prompts";
 import { CHOICE_MARKER } from "./choices";
@@ -8,11 +9,9 @@ export const povText = (v: StyleOptions["pov"]) => P(`pov.${v}`);
 export const pacingText = (v: StyleOptions["pacing"]) => P(`pacing.${v}`);
 export const dialogueText = (v: StyleOptions["dialogue"]) => P(`dialogue.${v}`);
 export const lengthText = (v: StyleOptions["length"]) => P(`length.${v}`);
-/** 분량별 출력 토큰 상한 (한국어 여유 포함) */
-const LENGTH_TOKENS: Record<StyleOptions["length"], number> = { short: 1500, medium: 3500, long: 7000 };
 
 /** 출력 토큰 상한 (분량 기준, 한국어 여유 포함) */
-export const outputTokensFor = (s: Settings) => LENGTH_TOKENS[s.style.length];
+export const outputTokensFor = (s: Settings) => T(`chat.tokens.${s.style.length}`); // 설정 → 세부 수치
 
 /** 이야기방에 연결된 라이브러리 항목 */
 export interface StoryContext {

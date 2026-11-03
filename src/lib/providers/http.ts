@@ -1,3 +1,4 @@
+import { T } from "../tuning";
 import { abortError, sleep } from "../sse";
 import { ProviderError } from "./types";
 
@@ -9,7 +10,7 @@ export async function fetchRetry(
   init: RequestInit,
   opt: { signal?: AbortSignal; onStatus?: (m: string) => void; retries?: number; label: string },
 ): Promise<Response> {
-  const retries = opt.retries ?? 2;
+  const retries = opt.retries ?? T("net.retries"); // 설정 → 세부 수치
   for (let attempt = 0; ; attempt++) {
     let res: Response;
     try {

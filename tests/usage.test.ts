@@ -2,7 +2,8 @@ import { describe, expect, test } from "vitest";
 import { costOf, formatUsd, priceFor } from "../src/lib/pricing";
 import { emptyUsage, monthRange, rangeDays, recordUsage, summarize } from "../src/lib/usage";
 import { buildEpisodeDiagnosis, buildRoomDiagnosis, splitDiagnosis } from "../src/lib/diagnose";
-import { MEMORY_MAX_BATCH, pendingForMemory } from "../src/lib/memory";
+import { memoryMaxBatch, pendingForMemory } from "../src/lib/memory";
+const MEMORY_MAX_BATCH = memoryMaxBatch();
 import { DEFAULT_SETTINGS, normalizeNovel, normalizeSettings, type Room } from "../src/lib/types";
 
 describe("pricing", () => {

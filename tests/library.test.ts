@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { formatLore, matchLore, parseKeys } from "../src/lib/lore";
-import { buildMemoryRequest, cleanMemory, MEMORY_BATCH, pendingForMemory } from "../src/lib/memory";
+import { buildMemoryRequest, cleanMemory, memoryBatch, pendingForMemory } from "../src/lib/memory";
+const MEMORY_BATCH = memoryBatch();
 import { buildSystemPrompt } from "../src/lib/prompt";
 import { parseLegacyBackup } from "../src/lib/importLegacy";
 import { DEFAULT_SETTINGS, type Character, type LoreEntry, type Message, type Room, type World } from "../src/lib/types";

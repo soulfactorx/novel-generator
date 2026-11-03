@@ -1,16 +1,17 @@
 import { contextSections, dialogueText, pacingText, povText, ratingText, type StoryContext } from "./prompt";
 import { P } from "./prompts";
+import { T } from "./tuning";
 import type { ChatMessage } from "./providers";
 import type { EpisodeLength, Novel, OutlineItem, Settings } from "./types";
 
-/** 회차 분량: [목표 글자 수, 출력 토큰 상한] */
-export const EPISODE_LENGTH: Record<EpisodeLength, { label: string; chars: number; tokens: number }> = {
-  short: { label: "짧게 (약 3,000자)", chars: 3000, tokens: 6000 },
-  medium: { label: "보통 (약 5,000자)", chars: 5000, tokens: 9000 },
-  long: { label: "길게 (약 8,000자)", chars: 8000, tokens: 14000 },
-};
+/** 회차 분량: 목표 글자 수 · 출력 토큰 상한 (설정 → 세부 수치) */
+const LENGTH_NAME: Record<EpisodeLength, string> = { short: "짧게", medium: "보통", long: "길게" };
+export const EPISODE_LENGTHS = Object.keys(LENGTH_NAME) as EpisodeLength[];
+export function episodeLength(k: EpisodeLength): { label: string; chars: number; tokens: number } {
+  const chars = T(`novel.chars.${k}`);
+  return { label: `${LENGTH_NAME[k]} (약 ${chars.toLocaleString()}자)`, chars, tokens: T(`novel.tokens.${k}`) };
+}
 export const SUMMARY_MARKER = "[회차 요약]";
-const TAIL_CHARS = 1500;
 
 function novelInfo(n: Novel): string {
   const body = [P("novel.info.title", { 내용: n.title || P("novel.info.untitled") }), n.genre.trim() && P("novel.info.genre", { 내용: n.genre.trim() }), n.brief.trim() && P("novel.info.brief", { 내용: n.brief.trim() })].filter(Boolean).join("\n");
@@ -62,10 +63,10 @@ export function buildNovelSystem(s: Settings, ctx: StoryContext, imageRules: str
 
 export function buildEpisodeRequest(s: Settings, n: Novel, ctx: StoryContext, index: number, opts: { lore?: string; note?: string; imageRules?: string[]; instructions?: string } = {}): { system: string; messages: ChatMessage[] } {
   const o = n.outline[index];
-  const len = EPISODE_LENGTH[n.episodeLength];
+  const len = episodeLength(n.episodeLength);
   const written = n.episodes.slice(0, index);
   const prevSummaries = written.map((e, i) => `[${i + 1}화] ${e.title}: ${e.summary || n.outline[i]?.summary || ""}`).join("\n");
-  const tail = written.length ? written[written.length - 1].text.slice(-TAIL_CHARS) : "";
+  const tail = written.length ? written[written.length - 1].text.slice(-T("novel.tailChars") || Infinity) : "";
   const user = P("novel.episode.user", {
     작품정보: novelInfo(n),
     개요: n.outline.map((x, i) => `[${i + 1}화]${i === index ? P("novel.episode.current") : ""} ${x.title}: ${x.summary}`).join("\n"),

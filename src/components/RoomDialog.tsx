@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MEMORY_BATCH, pendingForMemory } from "../lib/memory";
+import { memoryBatch, pendingForMemory } from "../lib/memory";
 import { getState, updateMemory, updateRoom, updateSettings, useApp } from "../lib/store";
 import type { Room } from "../lib/types";
 import CastPicker, { type Cast } from "./CastPicker";
@@ -52,7 +52,7 @@ export default function RoomDialog({ room, onClose, onOpenLibrary, initialTab = 
         <div className="space-y-3">
           <p className="hint">
             AI에게는 최근 {settings.contextMessages}개 메시지만 보내고, 그보다 오래된 내용은 이 요약으로 기억합니다.
-            {settings.autoMemory ? ` 자동 정리가 켜져 있어 오래된 메시지가 ${MEMORY_BATCH}개 쌓일 때마다 요약을 갱신합니다.` : " 자동 정리가 꺼져 있습니다."}
+            {settings.autoMemory ? ` 자동 정리가 켜져 있어 오래된 메시지가 ${memoryBatch()}개 쌓일 때마다 요약을 갱신합니다.` : " 자동 정리가 꺼져 있습니다."}
           </p>
           <textarea id="memory" className="input min-h-64" value={memory} onChange={(e) => setMemory(e.target.value)} aria-label="장기 기억" placeholder="아직 요약이 없습니다. 대화가 길어지면 자동으로 채워지고, 직접 써도 됩니다." />
           <div className="flex flex-wrap items-center gap-2">

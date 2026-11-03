@@ -17,7 +17,8 @@ import { decodePayload, encodePayload } from "./sync/codec";
 import { GistClient, GistError } from "./sync/gist";
 import { mergeSnapshots, type Snapshot } from "./sync/merge";
 import { PROVIDER_LABEL } from "./providers/catalog";
-import { buildEpisodeRequest, buildOutlineRequest, EPISODE_LENGTH, parseOutline, previewEpisode, splitEpisode } from "./novel";
+import { buildEpisodeRequest, buildOutlineRequest, episodeLength, parseOutline, previewEpisode, splitEpisode } from "./novel";
+import { setTuning, T } from "./tuning";
 import { DEFAULT_SETTINGS, type MessageUsage, normalizeNovel, normalizeRoom, normalizeSettings, type Character, type Entity, type EntityKind, type Episode, type ImageMeta, type Message, type Novel, type Persona, type Room, type Settings, type World } from "./types";
 
 export interface LiveState {
@@ -125,8 +126,10 @@ let controller: AbortController | null = null;
 export const getState = () => state;
 export function setState(patch: Partial<AppState> | ((s: AppState) => Partial<AppState>)) {
   const prevPrompts = state.settings.prompts;
+  const prevTuning = state.settings.tuning;
   state = { ...state, ...(typeof patch === "function" ? patch(state) : patch) };
   if (state.settings.prompts !== prevPrompts) setPromptOverrides(state.settings.prompts); // 설정 → 프롬프트에서 바꾼 문구
+  if (state.settings.tuning !== prevTuning) setTuning(state.settings.tuning); // 설정 → 세부 수치
   subs.forEach((f) => f());
 }
 export const subscribe = (f: () => void) => (subs.add(f), () => void subs.delete(f));
@@ -555,7 +558,7 @@ function hostFor(room: Room, vars: Record<string, string>) {
     lore: [...ctx.characters, ...(ctx.world ? [ctx.world] : [])].flatMap((c) => c.lore.map((l) => ({ comment: l.title, content: l.content, key: l.keys.join(", "), alwaysActive: !!l.always, ...(l.enabled === false ? { enabled: false } : {}), ...(l.secondKeys?.length ? { selective: true, secondkey: l.secondKeys.join(", ") } : {}), ...(l.order ? { insertorder: l.order } : {}) }))),
     llm: async (prompt: { role: string; content: string }[]) => {
       const sys = prompt.filter((p) => p.role === "system").map((p) => p.content).join("\n\n");
-      const res = await callAI("chat", { system: sys, messages: prompt.filter((p) => p.role !== "system").map((p) => ({ role: p.role === "user" ? "user" : "assistant", content: p.content })) as { role: "user" | "assistant"; content: string }[], maxTokens: 4000 });
+      const res = await callAI("chat", { system: sys, messages: prompt.filter((p) => p.role !== "system").map((p) => ({ role: p.role === "user" ? "user" : "assistant", content: p.content })) as { role: "user" | "assistant"; content: string }[], maxTokens: T("bot.llmTokens") });
       return res.text;
     },
   };
@@ -800,8 +803,8 @@ export function loreFor(room: Room, ctx: StoryContext): LoreHit[] {
   const groups = [...(ctx.world ? [{ source: ctx.world.name, entries: ctx.world.lore }] : []), ...ctx.characters.map((c) => ({ source: c.name, entries: c.lore }))];
   if (!groups.some((g) => g.entries.length)) return [];
   const msgs = room.messages.filter((m) => !m.error);
-  const recent = msgs.slice(-4).map((m) => m.text);
-  return matchLore(groups, recent.join("\n"), 4000, { messages: recent, chatLength: msgs.length + (msgs[0]?.greeting ? 0 : 1) });
+  const recent = msgs.slice(-T("chat.loreScan")).map((m) => m.text);
+  return matchLore(groups, recent.join("\n"), T("chat.loreBudget"), { messages: recent, chatLength: msgs.length + (msgs[0]?.greeting ? 0 : 1) });
 }
 
 async function runGeneration(roomId: string, note = "") {
@@ -929,7 +932,7 @@ export async function updateMemory(roomId: string, mode: "auto" | "manual"): Pro
   setState({ memoryJob: { roomId } });
   try {
     const req = buildMemoryRequest(s, room, pending, { user: contextFor(room).persona?.name });
-    const res = await callAI("memory", { ...req, maxTokens: 3000 });
+    const res = await callAI("memory", { ...req, maxTokens: T("memory.tokens") });
     const memory = cleanMemory(res.text);
     if (!memory) throw new Error("빈 요약이 돌아왔습니다.");
     updateRoom(roomId, { memory, memoryCursorAt: pending[pending.length - 1].createdAt, memoryUpdatedAt: Date.now() });
@@ -1036,7 +1039,7 @@ export async function generateOutline(novelId: string, from = 0): Promise<boolea
     const s = state.settings;
     const res = await callAI("outline", {
       ...buildOutlineRequest(s, n, contextFor(n), from),
-      maxTokens: Math.min(16000, 1500 + (n.episodeCount - from) * 250),
+      maxTokens: Math.min(T("novel.outlineTokens"), 1500 + (n.episodeCount - from) * 250),
       signal: novelController.signal,
       onText: (d) => novelLiveSet({ text: (streamed += d) }),
       onThinking: (d) => novelLiveSet({ thinking: (state.novelLive?.thinking ?? "") + d }),
@@ -1086,11 +1089,11 @@ export async function writeEpisode(novelId: string, index: number, note = "", un
     // RisuAI CBS: 소설은 이야기 변수가 없으므로 기본 변수·전역 변수(토글)로 설정 글을 정리
     const ctx = s.risu.cbs ? processContext(ctx0, buildEnv({ ctx: ctx0, globals: state.globals, images: Object.values(state.images), rmVar: true, seed: n.id })) : ctx0;
     const groups = [...(ctx.world ? [{ source: ctx.world.name, entries: ctx.world.lore }] : []), ...ctx.characters.map((c) => ({ source: c.name, entries: c.lore }))];
-    const scan = [n.outline[index].title, n.outline[index].summary, n.episodes[index - 1]?.text.slice(-1500) ?? ""].join("\n");
+    const scan = [n.outline[index].title, n.outline[index].summary, n.episodes[index - 1]?.text.slice(-T("novel.tailChars") || Infinity) ?? ""].join("\n");
     const lore = groups.length ? formatLore(matchLore(groups, scan)) : "";
     const res = await callAI("episode", {
       ...buildEpisodeRequest(s, n, ctx, index, { lore, note, imageRules: imagePromptSection(ctx, pool, "novel"), instructions: instructionsOf(ctx) }),
-      maxTokens: EPISODE_LENGTH[n.episodeLength].tokens,
+      maxTokens: episodeLength(n.episodeLength).tokens,
       signal: novelController.signal,
       onText: (d) => novelLiveSet({ text: previewEpisode((streamed += d)) }),
       onThinking: (d) => novelLiveSet({ thinking: (state.novelLive?.thinking ?? "") + d }),
@@ -1177,7 +1180,7 @@ async function runDiagnosis(req: { system: string; messages: { role: "user" | "a
   diagController = new AbortController();
   let all = "";
   try {
-    const res = await callAI("diagnose", { ...req, maxTokens: 3000, signal: diagController.signal, onText: (d) => onText?.((all += d)) }, { onRestart: () => onText?.((all = "")) });
+    const res = await callAI("diagnose", { ...req, maxTokens: T("diagnose.tokens"), signal: diagController.signal, onText: (d) => onText?.((all += d)) }, { onRestart: () => onText?.((all = "")) });
     const r = splitDiagnosis(res.text);
     if (!r.report) throw new Error("빈 진단이 돌아왔습니다.");
     return r;

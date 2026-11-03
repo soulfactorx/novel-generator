@@ -1,15 +1,15 @@
+import { T } from "./tuning";
 import { contextSections, ratingText, type StoryContext } from "./prompt";
 import { P } from "./prompts";
 import type { ChatMessage } from "./providers";
 import type { Novel, Room, Settings } from "./types";
 
 export const DIRECTIVE_MARKER = "[다음 지시]";
-const RECENT = 16;
 
 const rules = (s: Settings) => P("diagnose.rules", { 지시표시: DIRECTIVE_MARKER, 수위: ratingText(s.contentRating) });
 
 export function buildRoomDiagnosis(s: Settings, room: Room, ctx: StoryContext): { system: string; messages: ChatMessage[] } {
-  const recent = room.messages.filter((m) => !m.error && m.text.trim()).slice(-RECENT);
+  const recent = room.messages.filter((m) => !m.error && m.text.trim()).slice(-T("diagnose.recent"));
   const log = recent.map((m) => P(m.role === "user" ? "diagnose.userLine" : "diagnose.aiLine", { 내용: m.text })).join("\n\n");
   const system = P("diagnose.room.system", {
     형식: rules(s),

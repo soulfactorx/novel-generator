@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { downloadBlob, novelToEpub, novelToTxt, safeFileName, type ExportImages } from "../lib/exporters";
-import { charCount, EPISODE_LENGTH } from "../lib/novel";
+import { charCount, EPISODE_LENGTHS, episodeLength } from "../lib/novel";
 import { uid } from "../lib/id";
 import DiagnosisDialog from "./DiagnosisDialog";
 import { formatUsd } from "../lib/pricing";
@@ -117,7 +117,7 @@ function PlanTab({ novel: n, onOpenLibrary, onNext }: { novel: Novel; onOpenLibr
         </F>
         <F label="회차당 분량">
           <select className="input" value={n.episodeLength} onChange={(e) => up({ episodeLength: e.target.value as EpisodeLength })} aria-label="회차 분량">
-            {(Object.keys(EPISODE_LENGTH) as EpisodeLength[]).map((k) => <option key={k} value={k}>{EPISODE_LENGTH[k].label}</option>)}
+            {EPISODE_LENGTHS.map((k) => <option key={k} value={k}>{episodeLength(k).label}</option>)}
           </select>
         </F>
       </div>
@@ -226,7 +226,7 @@ function ManuscriptTab({ novel: n, live, busy, onRead, onOutline, onOpenSettings
               <button className="btn-primary" disabled={busy || !hasKey} onClick={() => void writeEpisode(n.id, next)}>✒️ {next + 1}화 쓰기</button>
               {lastIdx > next && <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={busy || !hasKey} onClick={() => confirm(`${next + 1}화부터 ${lastIdx + 1}화까지 ${lastIdx - next + 1}개 회차를 연속으로 씁니다. 언제든 중단할 수 있습니다. 진행할까요?`) && void writeEpisodes(n.id, lastIdx)}>⏩ {lastIdx + 1}화까지 연속 집필</button>}
             </div>
-            <p className="hint">회차당 {EPISODE_LENGTH[n.episodeLength].label} · 집필 중에는 화면이 자동으로 꺼지지 않게 유지합니다. 다른 앱으로 전환하면 생성이 끊길 수 있습니다.</p>
+            <p className="hint">회차당 {episodeLength(n.episodeLength).label} · 집필 중에는 화면이 자동으로 꺼지지 않게 유지합니다. 다른 앱으로 전환하면 생성이 끊길 수 있습니다.</p>
           </div>
         )
       )}
