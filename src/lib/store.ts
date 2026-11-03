@@ -52,6 +52,8 @@ export interface AppState {
   risuDialog: RisuDialog | null; // 봇(Lua·트리거)이 띄운 알림·입력 창
   risuTick: number; // 봇이 화면 다시 그리기를 요청할 때 증가
   lastRequest: LastRequest | null; // 마지막으로 AI에게 보낸 요청 (설정 → 프롬프트에서 확인, 저장하지 않음)
+  botBusy: BotBusy | null; // 봇 버튼·응답 마무리 처리 중 (화면에 진행 표시)
+  aiButtons: Record<string, string[]>; // 봇별로 AI를 부른 적 있는 버튼 (✨AI 표시, 이 기기에 저장)
 }
 export type RisuDialog =
   | { kind: "normal" | "error"; message: string; resolve: () => void }
@@ -90,7 +92,7 @@ export interface NovelLive {
   startedAt: number;
 }
 
-let state: AppState = { ready: false, storageError: "", settings: DEFAULT_SETTINGS, rooms: {}, library: {}, activeRoomId: null, live: null, memoryJob: null, lastUsage: null, legacyExtra: null, view: "rooms", novels: {}, activeNovelId: null, novelLive: null, novelError: null, usage: emptyUsage(), sync: { connected: false, auto: false, encrypted: false, running: false }, images: {}, globals: {}, risuDialog: null, risuTick: 0, lastRequest: null };
+let state: AppState = { ready: false, storageError: "", settings: DEFAULT_SETTINGS, rooms: {}, library: {}, activeRoomId: null, live: null, memoryJob: null, lastUsage: null, legacyExtra: null, view: "rooms", novels: {}, activeNovelId: null, novelLive: null, novelError: null, usage: emptyUsage(), sync: { connected: false, auto: false, encrypted: false, running: false }, images: {}, globals: {}, risuDialog: null, risuTick: 0, lastRequest: null, botBusy: null, aiButtons: loadAiButtons() };
 const subs = new Set<() => void>();
 const dirty = { rooms: new Set<string>(), library: new Set<string>(), novels: new Set<string>() };
 const deleted = { rooms: new Set<string>(), library: new Set<string>(), novels: new Set<string>() };
@@ -511,9 +513,69 @@ export function completeOnboarding(roomId: string, answers: Record<string, strin
   updateRoom(roomId, { vars, onboardingDone: true });
 }
 
-/** 봇 버튼(risu-trigger · risu-btn) 실행 */
-export async function runRisuTrigger(roomId: string, name: string, id: string | null, meta?: object): Promise<void> {
-  await runRoomTrigger(roomId, "manual", { manualName: name, triggerId: id, meta });
+/** 봇 버튼(risu-trigger · risu-btn) 실행. label: 화면에 보일 버튼 이름 */
+export async function runRisuTrigger(roomId: string, name: string, id: string | null, meta?: object, label?: string): Promise<void> {
+  await runRoomTrigger(roomId, "manual", { manualName: name, triggerId: id, meta, label });
+}
+
+/* ---------------- 봇 처리 중 표시 · AI 버튼 기억 ---------------- */
+export interface BotBusy {
+  roomId: string;
+  label: string; // 누른 버튼 이름 또는 '응답 마무리'
+  btn?: string; // 누른 버튼 (__btn:코드 · __form:이름 · 트리거 이름) — 다시 그려도 그 버튼에 진행 표시
+  startedAt: number;
+  ai: number; // 지금 기다리는 봇의 AI 호출 수
+  aiSince?: number; // 처음 AI를 부른 시각
+}
+/** 같은 종류의 버튼을 하나로 (예약 번호 같은 숫자는 무시): __btn:accept_9-2-day → accept_#-#-day */
+export const aiButtonKey = (name: string) => name.replace(/^__(btn|form):/, "").replace(/\d+/g, "#");
+/** 이야기방의 봇 (같은 인물·세계관이면 같은 봇) */
+export const botKeyOf = (r: Pick<Room, "characterIds" | "worldId">) => [...r.characterIds, r.worldId ?? ""].join(",");
+function loadAiButtons(): Record<string, string[]> {
+  try {
+    const v = JSON.parse(globalThis.localStorage?.getItem("botAiButtons") ?? "{}");
+    return v && typeof v === "object" ? v : {};
+  } catch {
+    return {};
+  }
+}
+function learnAiButton(room: Room, name: string) {
+  const bot = botKeyOf(room);
+  const key = aiButtonKey(name);
+  const cur = state.aiButtons[bot] ?? [];
+  if (!key || cur.includes(key)) return;
+  const aiButtons = { ...state.aiButtons, [bot]: [...cur, key].slice(-300) };
+  setState({ aiButtons });
+  try {
+    localStorage.setItem("botAiButtons", JSON.stringify(aiButtons));
+  } catch {
+    /* 저장 못 해도 이번에는 표시 */
+  }
+}
+/** 기억한 AI 버튼 지우기 (설정 → 저장소) */
+export function clearAiButtons() {
+  setState({ aiButtons: {} });
+  try {
+    localStorage.removeItem("botAiButtons");
+  } catch {
+    /* 무시 */
+  }
+}
+let busyDepth = 0;
+let busyManual: { roomId: string; name: string } | null = null; // 지금 처리 중인 버튼 (AI 호출을 그 버튼에 기록)
+function busyStart(roomId: string, label: string, btn?: string) {
+  if (busyDepth++ === 0) setState({ botBusy: { roomId, label, startedAt: Date.now(), ai: 0, ...(btn ? { btn } : {}) } });
+}
+function busyEnd() {
+  busyDepth = Math.max(0, busyDepth - 1);
+  if (!busyDepth) {
+    busyManual = null;
+    setState({ botBusy: null });
+  }
+}
+function busyAi(delta: 1 | -1) {
+  const b = state.botBusy;
+  if (b) setState({ botBusy: { ...b, ai: Math.max(0, b.ai + delta), aiSince: b.aiSince ?? Date.now() } });
 }
 
 /* ---------------- RisuAI 트리거 · Lua ---------------- */
@@ -557,11 +619,21 @@ function hostFor(room: Room, vars: Record<string, string>) {
     backgroundEmbedding: c0?.risu?.backgroundHTML,
     lore: [...ctx.characters, ...(ctx.world ? [ctx.world] : [])].flatMap((c) => c.lore.map((l) => ({ comment: l.title, content: l.content, key: l.keys.join(", "), alwaysActive: !!l.always, ...(l.enabled === false ? { enabled: false } : {}), ...(l.secondKeys?.length ? { selective: true, secondkey: l.secondKeys.join(", ") } : {}), ...(l.order ? { insertorder: l.order } : {}) }))),
     llm: async (prompt: { role: string; content: string }[]) => {
-      const sys = prompt.filter((p) => p.role === "system").map((p) => p.content).join("\n\n");
-      const res = await callAI("chat", { system: sys, messages: prompt.filter((p) => p.role !== "system").map((p) => ({ role: p.role === "user" ? "user" : "assistant", content: p.content })) as { role: "user" | "assistant"; content: string }[], maxTokens: T("bot.llmTokens") });
-      return res.text;
+      if (busyManual?.roomId === room.id) learnAiButton(room, busyManual.name); // 다음부터 이 버튼에 ✨AI 표시
+      busyAi(1);
+      try {
+        return await botLlm(prompt);
+      } finally {
+        busyAi(-1);
+      }
     },
   };
+}
+/** 봇 스크립트(Lua)가 직접 부르는 AI 요청 */
+async function botLlm(prompt: { role: string; content: string }[]): Promise<string> {
+  const sys = prompt.filter((p) => p.role === "system").map((p) => p.content).join("\n\n");
+  const res = await callAI("chat", { system: sys, messages: prompt.filter((p) => p.role !== "system").map((p) => ({ role: p.role === "user" ? "user" : "assistant", content: p.content })) as { role: "user" | "assistant"; content: string }[], maxTokens: T("bot.llmTokens") });
+  return res.text;
 }
 const splitGreetingRoom = (room: Pick<Room, "messages">) => {
   const first = room.messages[0]?.greeting ? room.messages[0] : undefined;
@@ -588,7 +660,19 @@ export interface TriggerRun {
  * 이야기방의 RisuAI 트리거 실행 (Lua + 블록 트리거).
  * mode: start(보내기 직전) · input(내 입력 후) · output(응답 후) · manual(버튼)
  */
-export async function runRoomTrigger(roomId: string, mode: "start" | "input" | "output" | "manual", arg: { manualName?: string; triggerId?: string | null; meta?: object } = {}): Promise<TriggerRun> {
+export async function runRoomTrigger(roomId: string, mode: "start" | "input" | "output" | "manual", arg: { manualName?: string; triggerId?: string | null; meta?: object; label?: string } = {}): Promise<TriggerRun> {
+  // 버튼·응답 마무리는 시간이 걸릴 수 있어(봇이 AI를 부르면) 화면에 진행 표시
+  const show = mode === "manual" || mode === "output";
+  if (!show) return runRoomTriggerInner(roomId, mode, arg);
+  if (mode === "manual" && arg.manualName) busyManual = { roomId, name: arg.manualName };
+  busyStart(roomId, mode === "output" ? "응답 마무리" : arg.label?.trim() || aiButtonKey(arg.manualName ?? "") || "버튼", mode === "manual" ? arg.manualName : undefined);
+  try {
+    return await runRoomTriggerInner(roomId, mode, arg);
+  } finally {
+    busyEnd();
+  }
+}
+async function runRoomTriggerInner(roomId: string, mode: "start" | "input" | "output" | "manual", arg: { manualName?: string; triggerId?: string | null; meta?: object }): Promise<TriggerRun> {
   const room = state.rooms[roomId];
   const s = state.settings.risu;
   if (!room) return { stop: false };

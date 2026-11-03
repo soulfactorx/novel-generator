@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import type { BotBusy } from "../lib/store";
 import { downloadBlob, roomToTxt, safeFileName } from "../lib/exporters";
-import { branchRoom, contextFor, displayCbs, displayLua, onboardingFor, runRisuTrigger, deleteMessage, diagnoseRoom, dismissMemoryError, editMessage, novelFromRoom, regenerate, rewindTo, selectRoom, send, setBookmark, stopGeneration, updateRoom, useApp } from "../lib/store";
+import { botKeyOf, branchRoom, contextFor, displayCbs, displayLua, onboardingFor, runRisuTrigger, deleteMessage, diagnoseRoom, dismissMemoryError, editMessage, novelFromRoom, regenerate, rewindTo, selectRoom, send, setBookmark, stopGeneration, updateRoom, useApp } from "../lib/store";
 import DiagnosisDialog from "./DiagnosisDialog";
 import Dialog from "./Dialog";
 import { PROVIDER_LABEL } from "../lib/providers/catalog";
@@ -32,6 +33,10 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
   useApp((s) => s.globals); // 토글이 바뀌면 다시 그림
   useApp((s) => s.risuTick); // 봇이 reloadDisplay를 부르면 다시 그림
   const memoryJob = useApp((s) => s.memoryJob);
+  const aiMap = useApp((s) => s.aiButtons);
+  const botBusyAny = useApp((s) => s.botBusy);
+  const botBusy = botBusyAny && room && botBusyAny.roomId === room.id ? botBusyAny : null;
+  const aiButtons = room ? aiMap[botKeyOf(room)] : undefined;
   const endRef = useRef<HTMLDivElement>(null);
   const busy = live !== null;
   const myLive = live && room && live.roomId === room.id ? live : null;
@@ -74,7 +79,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
   const myMemory = memoryJob?.roomId === room.id ? memoryJob : null;
   const submit = (text: string) => {
     // 빈 입력도 보낼 수 있음: 첫 장면 시작, 내 메시지(봇 선택지 버튼 등)에 대한 응답, 또는 앞 내용에 이어서 다음 전개
-    if (busy) return;
+    if (busy || botBusy) return; // 봇이 버튼·응답 마무리를 처리하는 중에는 기다림
     setInput("");
     void send(room.id, text);
   };
@@ -127,7 +132,8 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
               pool={pool}
               cbs={displayCbs(room, m.id)}
               luaDisplay={displayLua(room, m.id)}
-              onTrigger={(name, id, meta) => void runRisuTrigger(room.id, name, id, meta)}
+              onTrigger={(name, id, meta, label) => void runRisuTrigger(room.id, name, id, meta, label)}
+              aiButtons={aiButtons}
               onDelete={() => deleteMessage(room.id, m.id)}
               onEdit={(t) => editMessage(room.id, m.id, t)}
               onRetry={m === last ? () => void regenerate(room.id) : undefined}
@@ -190,6 +196,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
       <EmotionPanel messages={room.messages} pool={pool} cbsFor={(id) => displayCbs(room, id)} />
       </div>
       <div className="border-t border-stone-200 bg-stone-50/90 p-3 backdrop-blur dark:border-stone-800 dark:bg-stone-950/90">
+        {botBusy && <BotBusyBar b={botBusy} />}
         <div className={`content-width mx-auto flex items-end gap-2 lg:px-4 cw-${settings.readWidth}`}>
           <textarea
             className="input max-h-48 min-h-11 flex-1 resize-none"
@@ -207,7 +214,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
           {busy ? (
             <button className="btn-danger border border-rose-300" onClick={stopGeneration}>■ 중단</button>
           ) : (
-            <button className="btn-primary" disabled={!hasKey} onClick={() => submit(input)}>보내기</button>
+            <button className="btn-primary" disabled={!hasKey || !!botBusy} title={botBusy ? "봇이 처리하는 중입니다. 끝나면 보낼 수 있습니다." : undefined} onClick={() => submit(input)}>보내기</button>
           )}
         </div>
       </div>
@@ -276,6 +283,25 @@ function MoreMenu({ items }: { items: [string, () => void][] }) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/** 봇이 버튼·응답 마무리를 처리하는 중 — AI를 부르면 걸린 시간도 */
+function BotBusyBar({ b }: { b: BotBusy }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => tick((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const sec = (from: number) => Math.max(0, Math.floor((Date.now() - from) / 1000));
+  return (
+    <div className="mx-auto mb-2 flex w-full max-w-[64rem] items-center gap-2 rounded-lg bg-violet-50 px-3 py-1.5 text-xs text-violet-900 dark:bg-violet-950/50 dark:text-violet-200" role="status" aria-live="polite">
+      <span className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-current border-r-transparent" aria-hidden="true" />
+      <span className="min-w-0 truncate">
+        봇 처리 중{b.label ? <> · <b>{b.label}</b></> : null}
+        {b.ai > 0 ? <> · 🤖 AI 응답 기다리는 중 {sec(b.aiSince ?? b.startedAt)}초</> : b.aiSince ? <> · AI 응답 받음, 마무리 중</> : sec(b.startedAt) >= 2 ? <> · {sec(b.startedAt)}초</> : null}
+      </span>
     </div>
   );
 }

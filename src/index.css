@@ -59,3 +59,8 @@ body {
 .content-width.cw-narrow { max-width: 50rem; }
 .content-width.cw-wide { max-width: 64rem; }
 .content-width.cw-full { max-width: none; }
+/* 봇 버튼 처리 중 · AI 버튼 표시 (RisuText) */
+[data-ng-busy] { opacity: 0.6; cursor: progress !important; animation: ng-pulse 1.1s ease-in-out infinite; }
+@keyframes ng-pulse { 50% { opacity: 0.35; } }
+/* 봇 버튼 색과 상관없이 보이게: 진한 보라 바탕 + 흰 글자 */
+[data-ng-ai]::after { content: "✨AI"; display: inline-block; margin-left: 0.45em; padding: 0.05em 0.4em; border-radius: 0.45em; font-size: 0.72em; font-weight: 800; line-height: 1.4; letter-spacing: 0; white-space: nowrap; vertical-align: middle; background: #6d28d9; color: #fff; box-shadow: 0 0 0 1px rgb(255 255 255 / 0.35); }
