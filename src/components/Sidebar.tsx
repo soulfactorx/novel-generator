@@ -69,10 +69,11 @@ export default function Sidebar({ open, onClose, onOpenSettings, onNewStory, onO
             {pwa.canInstall && <button className="ml-auto font-semibold text-violet-600" onClick={() => void promptInstall()}>📲 앱 설치</button>}
           </div>
         )}
-        <div className="flex gap-1 border-t border-stone-200 p-2 dark:border-stone-800">
-          <button className="btn-ghost flex-1 px-1" onClick={() => { onOpenLibrary(); onClose(); }}>📚 라이브러리</button>
-          <button className="btn-ghost flex-1 px-1" onClick={() => onOpenSettings("ai")}>⚙️ 설정</button>
-          <button className="btn-ghost flex-1 px-1" onClick={() => onOpenSettings("data")}>📦 데이터</button>
+        {/* 줄바꿈 없이 한 줄로: 글자가 긴 '라이브러리'에 폭을 조금 더 */}
+        <div className="flex gap-0.5 border-t border-stone-200 p-2 text-sm dark:border-stone-800">
+          <button className="btn-ghost flex-[1.4] gap-1 whitespace-nowrap px-1" onClick={() => { onOpenLibrary(); onClose(); }}>📚 라이브러리</button>
+          <button className="btn-ghost flex-1 gap-1 whitespace-nowrap px-1" onClick={() => onOpenSettings("ai")}>⚙️ 설정</button>
+          <button className="btn-ghost flex-1 gap-1 whitespace-nowrap px-1" onClick={() => onOpenSettings("data")}>📦 데이터</button>
         </div>
       </aside>
     </>
