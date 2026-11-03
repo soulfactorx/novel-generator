@@ -1,3 +1,4 @@
+import { P } from "../prompts";
 import { generateClaude } from "./anthropic";
 import { generateGemini } from "./gemini";
 import { generateOpenAI } from "./openai";
@@ -18,5 +19,5 @@ export function generate(req: GenerateRequest): Promise<GenerateResult> {
 
 /** 설정 화면의 '연결 테스트' */
 export async function testConnection(req: Omit<GenerateRequest, "system" | "messages" | "maxTokens">): Promise<GenerateResult> {
-  return generate({ ...req, settings: { ...req.settings, streaming: false }, system: "Reply with one short word.", messages: [{ role: "user", content: "ping" }], maxTokens: 32 });
+  return generate({ ...req, settings: { ...req.settings, streaming: false }, system: P("test.system"), messages: [{ role: "user", content: P("test.user") }], maxTokens: 32 });
 }

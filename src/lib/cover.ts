@@ -1,4 +1,5 @@
 import type { StoryContext } from "./prompt";
+import { P } from "./prompts";
 import type { Usage } from "./providers/types";
 import type { Novel } from "./types";
 
@@ -14,18 +15,13 @@ const cut = (s: string, n: number) => (s.length > n ? s.slice(0, n) + "…" : s)
 
 /** 표지 그림 프롬프트. 표지는 누구나 보는 이미지이므로 소설의 수위와 관계없이 전체 이용가로 요청 */
 export function buildCoverPrompt(n: Novel, ctx: StoryContext): string {
-  const parts = [
-    "Book cover illustration for a Korean web novel.",
-    n.genre.trim() && `Genre: ${n.genre.trim()}.`,
-    n.title.trim() && `Title (for mood only, do not write it): ${n.title.trim()}.`,
-    n.brief.trim() && `Story: ${cut(n.brief.trim().replace(/\s+/g, " "), 500)}`,
-    ctx.world && `Setting: ${ctx.world.name}. ${cut(ctx.world.description.replace(/\s+/g, " "), 250)}`,
-    ctx.characters.length > 0 && `Main characters: ${ctx.characters.slice(0, 3).map((c) => `${c.name}${c.summary ? ` (${c.summary})` : ""}`).join(", ")}.`,
-    "Style: polished digital painting, cinematic lighting, rich atmosphere, vertical book-cover composition, keep the upper third calm and uncluttered for a title.",
-    "Do not include any text, letters, numbers, logos, signatures or watermarks.",
-    "Safe for all ages: no nudity, no sexual content, no gore.",
-  ];
-  return parts.filter(Boolean).join("\n");
+  return P("cover.prompt", {
+    장르: n.genre.trim() ? P("cover.genre", { 내용: n.genre.trim() }) : "",
+    제목: n.title.trim() ? P("cover.title", { 내용: n.title.trim() }) : "",
+    줄거리: n.brief.trim() ? P("cover.story", { 내용: cut(n.brief.trim().replace(/\s+/g, " "), 500) }) : "",
+    배경: ctx.world ? P("cover.setting", { 이름: ctx.world.name, 설명: cut(ctx.world.description.replace(/\s+/g, " "), 250) }) : "",
+    인물: ctx.characters.length > 0 ? P("cover.cast", { 내용: ctx.characters.slice(0, 3).map((c) => `${c.name}${c.summary ? ` (${c.summary})` : ""}`).join(", ") }) : "",
+  });
 }
 
 export interface CoverImage {

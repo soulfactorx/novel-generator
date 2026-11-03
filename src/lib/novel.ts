@@ -1,4 +1,5 @@
-import { contextSections, DIALOGUE, PACING, POV, RATING_POLICY, type StoryContext } from "./prompt";
+import { contextSections, dialogueText, pacingText, povText, ratingText, type StoryContext } from "./prompt";
+import { P } from "./prompts";
 import type { ChatMessage } from "./providers";
 import type { EpisodeLength, Novel, OutlineItem, Settings } from "./types";
 
@@ -12,38 +13,22 @@ export const SUMMARY_MARKER = "[회차 요약]";
 const TAIL_CHARS = 1500;
 
 function novelInfo(n: Novel): string {
-  return [`제목: ${n.title || "(미정)"}`, n.genre.trim() && `장르: ${n.genre.trim()}`, n.brief.trim() && `기획:\n${n.brief.trim()}`].filter(Boolean).join("\n");
+  const body = [P("novel.info.title", { 내용: n.title || P("novel.info.untitled") }), n.genre.trim() && P("novel.info.genre", { 내용: n.genre.trim() }), n.brief.trim() && P("novel.info.brief", { 내용: n.brief.trim() })].filter(Boolean).join("\n");
+  return P("novel.info", { 내용: body });
 }
 
 /* ---------------- 개요 ---------------- */
 export function buildOutlineRequest(s: Settings, n: Novel, ctx: StoryContext, from: number): { system: string; messages: ChatMessage[] } {
-  const count = n.episodeCount - from;
-  const system = [
-    "너는 웹소설 기획 편집자다. 작가가 회차별로 집필할 수 있도록 연재 개요를 짠다.",
-    "",
-    "## 원칙",
-    "- 회차마다 분명한 사건과 변화가 있고, 회차 끝은 다음 화가 궁금해지는 고리로 맺는다.",
-    "- 전체가 도입 → 전개 → 위기 → 절정 → 결말의 흐름을 갖도록 배분한다. 목표 회차 수 안에서 이야기를 마무리한다.",
-    "- 설정과 인물의 성격·관계를 일관되게 지킨다.",
-    `- ${RATING_POLICY[s.contentRating]}`,
-    "",
-    "## 출력 형식 (이 형식만 출력, 머리말·설명 금지)",
-    "[1화] 회차 제목",
-    "이 회차의 핵심 사건, 갈등, 끝맺음을 2~4문장으로.",
-    "",
-    "[2화] 회차 제목",
-    "…",
-    ...contextSections(ctx, "novel"),
-  ].join("\n");
+  const system = P("novel.outline.system", { 수위: ratingText(s.contentRating), 설정: contextSections(ctx, "novel").join("\n").trim() });
   const prev = n.outline.slice(0, from);
-  const user = [
-    `## 작품 정보\n${novelInfo(n)}`,
-    prev.length ? `## 이미 정해진 회차 (그대로 유지)\n${formatOutline(prev)}` : "",
-    from > 0 && n.episodes[from - 1]?.summary ? `## 직전 회차에서 실제로 쓴 내용\n${n.episodes[from - 1].summary}` : "",
-    `${from + 1}화부터 ${n.episodeCount}화까지 ${count}개 회차의 개요를 위 형식으로 작성하라.`,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const user = P("novel.outline.user", {
+    작품정보: novelInfo(n),
+    이전회차: prev.length ? P("novel.outline.prev", { 내용: formatOutline(prev) }) : "",
+    직전내용: from > 0 && n.episodes[from - 1]?.summary ? P("novel.outline.last", { 내용: n.episodes[from - 1].summary }) : "",
+    시작: from + 1,
+    끝: n.episodeCount,
+    개수: n.episodeCount - from,
+  });
   return { system, messages: [{ role: "user", content: user }] };
 }
 
@@ -65,21 +50,14 @@ export function parseOutline(text: string): { number: number; title: string; sum
 
 /* ---------------- 회차 집필 ---------------- */
 export function buildNovelSystem(s: Settings, ctx: StoryContext, imageRules: string[] = []): string {
-  return [
-    "너는 한국어 웹소설 작가다. 주어진 개요에 따라 연재 소설의 한 회차를 완성된 원고로 쓴다.",
-    "",
-    "## 작성 원칙",
-    "- 읽기 좋은 웹소설 문체. 장면·행동이 바뀔 때 문단을 나누고 대사는 큰따옴표로 감싼다.",
-    "- 개요의 사건을 빠짐없이 다루되, 요약하듯 넘기지 말고 장면으로 보여 준다.",
-    "- 앞 회차와 자연스럽게 이어지게 쓰고, 이미 쓴 문장·표현을 반복하지 않는다.",
-    "- 회차 제목, 작가의 말, 해설 없이 본문만 쓴다.",
-    `- 시점: ${POV[s.style.pov]}`,
-    `- 전개: ${PACING[s.style.pacing]}`,
-    `- 대사: ${DIALOGUE[s.style.dialogue]}`,
-    `- ${RATING_POLICY[s.contentRating]}`,
-    ...contextSections(ctx, "novel"),
-    ...imageRules,
-  ].join("\n");
+  return P("novel.system", {
+    시점: povText(s.style.pov),
+    전개: pacingText(s.style.pacing),
+    대사: dialogueText(s.style.dialogue),
+    수위: ratingText(s.contentRating),
+    설정: contextSections(ctx, "novel").join("\n").trim(),
+    그림: imageRules.join("\n").trim(),
+  });
 }
 
 export function buildEpisodeRequest(s: Settings, n: Novel, ctx: StoryContext, index: number, opts: { lore?: string; note?: string; imageRules?: string[]; instructions?: string } = {}): { system: string; messages: ChatMessage[] } {
@@ -88,24 +66,21 @@ export function buildEpisodeRequest(s: Settings, n: Novel, ctx: StoryContext, in
   const written = n.episodes.slice(0, index);
   const prevSummaries = written.map((e, i) => `[${i + 1}화] ${e.title}: ${e.summary || n.outline[i]?.summary || ""}`).join("\n");
   const tail = written.length ? written[written.length - 1].text.slice(-TAIL_CHARS) : "";
-  const user = [
-    `## 작품 정보\n${novelInfo(n)}`,
-    `## 전체 개요\n${n.outline.map((x, i) => `[${i + 1}화]${i === index ? " ◀ 이번 회차" : ""} ${x.title}: ${x.summary}`).join("\n")}`,
-    prevSummaries && `## 지금까지 쓴 내용\n${prevSummaries}`,
-    tail && `## 직전 회차의 마지막 부분 (여기서 자연스럽게 이어 쓸 것)\n…${tail}`,
-    opts.lore && `## 참고 설정 (이번 회차와 관련된 자료, 필요한 만큼만 반영)\n${opts.lore}`,
-    `## 이번에 쓸 회차: ${index + 1}화 「${o.title}」\n${o.summary}`,
-    opts.instructions?.trim() && `## 설정에 정해진 지시 (반드시 따를 것)\n${opts.instructions.trim()}`,
-    opts.note?.trim() && `## 작가의 추가 요청\n${opts.note.trim()}`,
-    [
-      "## 지시",
-      `- 공백 포함 약 ${len.chars.toLocaleString()}자 분량의 본문을 쓴다.`,
-      index === n.episodeCount - 1 ? "- 마지막 회차다. 이야기를 완결한다." : "- 회차 끝은 다음 화가 궁금해지도록 맺는다.",
-      `- 본문을 마친 뒤 빈 줄을 두고 "${SUMMARY_MARKER}" 한 줄을 쓴 다음, 이번 회차에서 실제로 일어난 일을 3~5문장으로 요약한다. (다음 회차 집필용)`,
-    ].join("\n"),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const user = P("novel.episode.user", {
+    작품정보: novelInfo(n),
+    개요: n.outline.map((x, i) => `[${i + 1}화]${i === index ? P("novel.episode.current") : ""} ${x.title}: ${x.summary}`).join("\n"),
+    지금까지: prevSummaries ? P("novel.episode.written", { 내용: prevSummaries }) : "",
+    직전부분: tail ? P("novel.episode.tail", { 내용: tail }) : "",
+    참고설정: opts.lore ? P("novel.episode.lore", { 내용: opts.lore }) : "",
+    번호: index + 1,
+    제목: o.title,
+    회차개요: o.summary,
+    설정지시: opts.instructions?.trim() ? P("novel.episode.instructions", { 내용: opts.instructions.trim() }) : "",
+    추가요청: opts.note?.trim() ? P("novel.episode.note", { 내용: opts.note.trim() }) : "",
+    글자수: len.chars.toLocaleString(),
+    끝맺음: P(index === n.episodeCount - 1 ? "novel.episode.final" : "novel.episode.hook"),
+    요약표시: SUMMARY_MARKER,
+  });
   return { system: buildNovelSystem(s, ctx, opts.imageRules), messages: [{ role: "user", content: user }] };
 }
 

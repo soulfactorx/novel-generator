@@ -5,16 +5,18 @@ import { parseRisuFile, parseRisuJson, withSource, type RisuImport } from "../li
 import { listModels } from "../lib/modelList";
 import { testConnection } from "../lib/providers";
 import { CLAUDE_MODELS, GEMINI_MODELS, OPENAI_PRESETS, PROVIDER_LABEL } from "../lib/providers/catalog";
-import { RATING_POLICY } from "../lib/prompt";
+import { ratingText } from "../lib/prompt";
 import { existingPackages, getState, importLegacy, importLegacyExtra, importRisu, updateSettings, upsertLibrary, upsertNovels, upsertRooms, useApp } from "../lib/store";
 import type { ContentRating, ProviderId, Room, Settings, StyleOptions } from "../lib/types";
 import Dialog from "./Dialog";
 import UsageTab from "./UsageTab";
+import PromptsTab from "./PromptsTab";
+import StorageTab from "./StorageTab";
 import SyncSection from "./SyncSection";
 import InstallSection from "./InstallSection";
 import { hasKeyFor } from "../lib/store";
 
-const TABS = [["ai", "AI 연결"], ["writing", "글쓰기"], ["rating", "콘텐츠 수위"], ["usage", "사용량·비용"], ["data", "데이터"]] as const;
+const TABS = [["ai", "AI 연결"], ["writing", "글쓰기"], ["rating", "콘텐츠 수위"], ["prompts", "프롬프트"], ["usage", "사용량·비용"], ["data", "데이터"], ["storage", "저장소"]] as const;
 
 export default function SettingsDialog({ initialTab, onClose }: { initialTab: string; onClose: () => void }) {
   const [tab, setTab] = useState(initialTab);
@@ -32,6 +34,8 @@ export default function SettingsDialog({ initialTab, onClose }: { initialTab: st
       {tab === "rating" && <RatingTab />}
       {tab === "data" && <DataTab />}
       {tab === "usage" && <UsageTab />}
+      {tab === "prompts" && <PromptsTab />}
+      {tab === "storage" && <StorageTab />}
     </Dialog>
   );
 }
@@ -211,7 +215,7 @@ function RatingTab() {
         <span>본인은 만 19세 이상이며, 성인 콘텐츠를 스스로 선택해 이용합니다. <span className="hint block">확인을 해제하면 '성숙' 등급으로 돌아갑니다.</span></span>
       </label>
       <p className="hint">어느 등급이든 각 AI 제공업체의 이용 정책이 우선 적용되며, 모델이 응답을 거절할 수 있습니다. 미성년자, 비동의 성적 묘사, 실존 인물은 어떤 등급에서도 다루지 않습니다.</p>
-      <details className="hint"><summary className="cursor-pointer">현재 등급에서 AI에게 전달되는 지침 보기</summary><p className="mt-2 whitespace-pre-wrap">{RATING_POLICY[s.contentRating]}</p></details>
+      <details className="hint"><summary className="cursor-pointer">현재 등급에서 AI에게 전달되는 지침 보기</summary><p className="mt-2 whitespace-pre-wrap">{ratingText(s.contentRating)}</p></details>
     </div>
   );
 }

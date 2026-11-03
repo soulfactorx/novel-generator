@@ -108,3 +108,57 @@ export async function requestPersist(): Promise<boolean> {
     return false;
   }
 }
+
+/* ---------------- 저장소 관리 ---------------- */
+const byteLength = (v: unknown): number => {
+  if (v instanceof ArrayBuffer) return v.byteLength;
+  if (ArrayBuffer.isView(v)) return v.byteLength;
+  try {
+    return new TextEncoder().encode(JSON.stringify(v) ?? "").length;
+  } catch {
+    return 0;
+  }
+};
+/** kv 저장소 항목과 크기 (바이트) */
+export async function listKV(): Promise<{ key: string; size: number }[]> {
+  const d = await openDB();
+  const t = d.transaction("kv", "readonly");
+  const [keys, vals] = await Promise.all([req(t.objectStore("kv").getAllKeys()), req(t.objectStore("kv").getAll())]);
+  return keys.map((k, i) => ({ key: String(k), size: byteLength(vals[i]) }));
+}
+/** 이미지 바이트 실제 크기 합계와, 정보 없이 남은 바이트(고아) id */
+export async function scanImageData(knownIds: Set<string>): Promise<{ total: number; orphanIds: string[]; orphanSize: number }> {
+  const d = await openDB();
+  const os = d.transaction("imageData", "readonly").objectStore("imageData");
+  const [keys, vals] = await Promise.all([req(os.getAllKeys()), req(os.getAll())]);
+  let total = 0;
+  let orphanSize = 0;
+  const orphanIds: string[] = [];
+  keys.forEach((k, i) => {
+    const n = byteLength(vals[i]);
+    total += n;
+    if (!knownIds.has(String(k))) {
+      orphanIds.push(String(k));
+      orphanSize += n;
+    }
+  });
+  return { total, orphanIds, orphanSize };
+}
+export async function deleteImageData(ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  const d = await openDB();
+  const t = d.transaction("imageData", "readwrite");
+  ids.forEach((id) => t.objectStore("imageData").delete(id));
+  await done(t);
+}
+/** 이 앱의 IndexedDB 전체 삭제 (초기화) */
+export async function wipeDatabase(): Promise<void> {
+  if (dbp) (await dbp).close();
+  dbp = null;
+  await new Promise<void>((res, rej) => {
+    const r = indexedDB.deleteDatabase(DB_NAME);
+    r.onsuccess = () => res();
+    r.onerror = () => rej(r.error);
+    r.onblocked = () => res(); // 다른 탭이 열려 있으면 그 탭이 닫힐 때 지워짐
+  });
+}

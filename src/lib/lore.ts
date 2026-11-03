@@ -1,4 +1,5 @@
 import type { LoreEntry } from "./types";
+import { P } from "./prompts";
 
 /** "등불, 마력등 / 가로등" → ["등불","마력등","가로등"] */
 export function parseKeys(s: string): string[] {
@@ -202,5 +203,5 @@ export function matchLore(groups: { source: string; entries: LoreEntry[] }[], te
 }
 
 export function formatLore(hits: LoreHit[]): string {
-  return hits.map((h) => `- ${h.entry.title || h.entry.keys[0] || "설정"}${h.source ? ` (${h.source})` : ""}: ${h.entry.content.trim()}`).join("\n");
+  return hits.map((h) => P("chat.loreItem", { 제목: h.entry.title || h.entry.keys[0] || P("chat.loreUntitled"), 출처: h.source ? P("chat.loreSource", { 내용: h.source }) : "", 내용: h.entry.content.trim() })).join("\n");
 }
