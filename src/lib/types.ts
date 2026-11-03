@@ -1,3 +1,4 @@
+import { cleanTuning } from "./tuning";
 export type ProviderId = "gemini" | "anthropic" | "openai";
 
 /** 콘텐츠 수위. general(기본) → mature → adult(본인이 직접 켜야 함) */
@@ -35,6 +36,7 @@ export interface Settings {
   /** RisuAI 호환 기능 켜고 끄기 */
   risu: RisuOptions;
   prompts: Record<string, string>; // 설정 → 프롬프트에서 바꾼 문구 (id → 문구, 바꾼 것만)
+  tuning: Record<string, number>; // 설정 → 세부 수치에서 바꾼 값 (id → 값, 바꾼 것만)
   dialogueColors: boolean; // 대사(따옴표)를 다른 색으로
   dialogueColor: string; // 대사 색 (#rrggbb, 빈 값이면 기본 색)
   readWidth: "narrow" | "wide" | "full"; // 본문 폭: 좁게(48rem) · 보통(72rem) · 화면 가득
@@ -215,6 +217,7 @@ export const DEFAULT_SETTINGS: Settings = {
   coverModel: "gemini-nano-banana-2.1",
   risu: { cbs: true, scripts: true, triggers: true, lua: true, background: true, markdown: true, imageEveryTurn: true },
   prompts: {},
+  tuning: {},
   dialogueColors: true,
   dialogueColor: "",
   readWidth: "wide",
@@ -242,6 +245,7 @@ export function normalizeSettings(raw: unknown): Settings {
     fallback: { ...DEFAULT_SETTINGS.fallback, ...(r.fallback || {}) },
     risu: { ...DEFAULT_SETTINGS.risu, ...(r.risu || {}) },
     customPrices: r.customPrices && typeof r.customPrices === "object" ? r.customPrices : {},
+    tuning: cleanTuning(r.tuning),
     prompts: Object.fromEntries(Object.entries(r.prompts && typeof r.prompts === "object" ? r.prompts : {}).filter(([, v]) => typeof v === "string")) as Record<string, string>,
     version: 1,
   };

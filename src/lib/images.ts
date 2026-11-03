@@ -5,6 +5,7 @@
  *  - 에셋 표시 {{img|image|asset|emotion|raw|path::이름}} 를 실제 그림으로 바꾼다. (이름이 조금 달라도 가장 비슷한 에셋)
  * 원본: RisuAI src/ts/process/scripts.ts · parser.svelte.ts 의 동작을 이 앱에 맞게 다시 구현
  */
+import { T } from "./tuning";
 import { P } from "./prompts";
 import type { StoryContext } from "./prompt";
 import type { ImageMeta, RegexScript } from "./types";
@@ -421,10 +422,10 @@ export function imagePromptSection(ctx: StoryContext, pool: ImagePool, mode: "ch
   if (own) out.push("", P(mode === "novel" ? "image.own.novel" : everyTurn ? "image.own.chatEvery" : "image.own.chat"));
   else if (pool.assets.length) {
     const names = pool.assets.filter((m) => m.kind !== "icon").map((m) => m.name);
-    if (names.length) out.push("", P("image.list", { 빈도: P(mode === "novel" ? "image.freq.novel" : everyTurn ? "image.freq.chatEvery" : "image.freq.chat"), 목록: names.slice(0, 150).join(", ") }));
+    if (names.length) out.push("", P("image.list", { 빈도: P(mode === "novel" ? "image.freq.novel" : everyTurn ? "image.freq.chatEvery" : "image.freq.chat"), 목록: names.slice(0, T("image.listMax")).join(", ") }));
   }
   if (pool.emotionMode && pool.emotions.length) {
-    const list = [...new Set(pool.emotions.map((m) => m.name))].slice(0, 150).join(", ");
+    const list = [...new Set(pool.emotions.map((m) => m.name))].slice(0, T("image.listMax")).join(", ");
     out.push("", P(mode === "chat" ? "image.emotion.chat" : "image.emotion.novel", { 목록: list }));
   }
   return out;
@@ -500,16 +501,16 @@ export function uniqueName(name: string, taken: Iterable<string>): string {
 
 /** 큰 그림은 저장 전에 줄인다 (1.2MB 넘을 때 긴 변 1600px로, 움직이는 GIF는 그대로). canvas가 없으면 원본 */
 export async function shrinkImage(bytes: Uint8Array, mime: string): Promise<{ bytes: Uint8Array; mime: string }> {
-  if (bytes.length < 1_200_000 || mime === "image/gif" || typeof document === "undefined" || typeof createImageBitmap === "undefined") return { bytes, mime };
+  if (bytes.length < T("image.shrinkOver") * 1000 || mime === "image/gif" || typeof document === "undefined" || typeof createImageBitmap === "undefined") return { bytes, mime };
   try {
     const bmp = await createImageBitmap(new Blob([bytes as BlobPart], { type: mime }));
-    const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const scale = Math.min(1, T("image.maxSide") / Math.max(bmp.width, bmp.height));
     const c = document.createElement("canvas");
     c.width = Math.round(bmp.width * scale);
     c.height = Math.round(bmp.height * scale);
     c.getContext("2d")!.drawImage(bmp, 0, 0, c.width, c.height);
     bmp.close?.();
-    const blob = await new Promise<Blob | null>((res) => c.toBlob(res, "image/webp", 0.88));
+    const blob = await new Promise<Blob | null>((res) => c.toBlob(res, "image/webp", T("image.quality") / 100));
     if (!blob || blob.size >= bytes.length) return { bytes, mime };
     return { bytes: new Uint8Array(await blob.arrayBuffer()), mime: blob.type || "image/webp" };
   } catch {

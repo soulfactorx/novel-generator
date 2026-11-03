@@ -11,12 +11,13 @@ import type { ContentRating, ProviderId, Room, Settings, StyleOptions } from "..
 import Dialog from "./Dialog";
 import UsageTab from "./UsageTab";
 import PromptsTab from "./PromptsTab";
+import TuningTab from "./TuningTab";
 import StorageTab from "./StorageTab";
 import SyncSection from "./SyncSection";
 import InstallSection from "./InstallSection";
 import { hasKeyFor } from "../lib/store";
 
-const TABS = [["ai", "AI 연결"], ["writing", "글쓰기"], ["rating", "콘텐츠 수위"], ["prompts", "프롬프트"], ["usage", "사용량·비용"], ["data", "데이터"], ["storage", "저장소"]] as const;
+const TABS = [["ai", "AI 연결"], ["writing", "글쓰기"], ["rating", "콘텐츠 수위"], ["prompts", "프롬프트"], ["tuning", "세부 수치"], ["usage", "사용량·비용"], ["data", "데이터"], ["storage", "저장소"]] as const;
 
 export default function SettingsDialog({ initialTab, onClose }: { initialTab: string; onClose: () => void }) {
   const [tab, setTab] = useState(initialTab);
@@ -41,6 +42,7 @@ export default function SettingsDialog({ initialTab, onClose }: { initialTab: st
       {tab === "data" && <DataTab />}
       {tab === "usage" && <UsageTab />}
       {tab === "prompts" && <PromptsTab />}
+      {tab === "tuning" && <TuningTab />}
       {tab === "storage" && <StorageTab />}
     </Dialog>
   );
