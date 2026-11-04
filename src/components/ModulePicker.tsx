@@ -3,7 +3,7 @@
  * 붙인 모듈의 그림·로어북·정규식 스크립트·트리거(Lua)·토글·배경 화면이 봇과 함께 동작한다. 이야기의 세계관 자리는 그대로.
  */
 import { useRef, useState } from "react";
-import { parseRisuFile } from "../lib/risu";
+import { cardAsModule, parseRisuFile } from "../lib/risu";
 import { entitiesOf, existingPackages, importRisu, useApp } from "../lib/store";
 import type { World } from "../lib/types";
 
@@ -26,10 +26,12 @@ function AddModule({ exclude, onAdd }: { exclude: string[]; onAdd: (id: string) 
   const importFile = async (f: File) => {
     setMsg("가져오는 중…");
     try {
-      const data = await parseRisuFile(f.name, new Uint8Array(await f.arrayBuffer()));
-      const incoming = data.library.find((e) => e.kind === "world");
-      if (!incoming) {
-        setMsg("⚠️ 모듈(.risum)이 아닙니다. 캐릭터 카드는 [설정 → 데이터]에서 가져오세요.");
+      const parsed = await parseRisuFile(f.name, new Uint8Array(await f.arrayBuffer()));
+      // 모듈(.risum·모듈 JSON)은 그대로, 캐릭터 카드(charx 등)는 그림·스크립트 묶음 모듈로 바꿔서
+      const data = parsed.library.some((e) => e.kind === "world") ? parsed : cardAsModule(parsed);
+      const incoming = data?.library.find((e) => e.kind === "world");
+      if (!data || !incoming) {
+        setMsg("⚠️ 모듈로 쓸 수 있는 파일이 아닙니다 (.risum · 모듈 JSON · .charx 카드).");
         return;
       }
       // 같은 모듈을 이미 가져왔으면 그것을 새 내용으로 교체하고 붙인다 (중복 방지)
@@ -48,8 +50,8 @@ function AddModule({ exclude, onAdd }: { exclude: string[]; onAdd: (id: string) 
           <option value="">+ 라이브러리에서 모듈 붙이기…</option>
           {choices.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
         </select>
-        <button className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700" onClick={() => fileRef.current?.click()}>⬆ .risum 가져와 붙이기</button>
-        <input ref={fileRef} type="file" accept=".risum,.json,application/json" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void importFile(f); e.target.value = ""; }} />
+        <button className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700" onClick={() => fileRef.current?.click()}>⬆ 모듈 파일 가져와 붙이기</button>
+        <input ref={fileRef} type="file" accept=".risum,.charx,.zip,.json,application/json,.png" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void importFile(f); e.target.value = ""; }} />
       </div>
       {msg && <p className="text-xs">{msg}</p>}
     </div>
@@ -64,7 +66,7 @@ export function CharacterModules({ ids, selfWorldId, onChange }: { ids: string[]
   return (
     <div className="space-y-2">
       <span className="label mb-0">🧩 모듈 ({list.length})</span>
-      <p className="hint">RisuAI 모듈(.risum)이나 라이브러리의 세계관을 이 인물에 붙입니다. 붙인 모듈의 그림·로어북·스크립트·트리거·배경이 이 인물이 나오는 모든 이야기에서 함께 동작합니다. 이야기마다 [📝 설정]에서 끌 수 있습니다.</p>
+      <p className="hint">RisuAI 모듈(.risum)이나 라이브러리의 세계관을 이 인물에 붙입니다. 붙인 모듈의 그림·로어북·스크립트·트리거·배경이 이 인물이 나오는 모든 이야기에서 함께 동작합니다. 이야기는 [📝 설정], 소설은 기획 탭에서 따로 끌 수 있습니다.</p>
       {list.map((m) => (
         <div key={m.id} className="flex items-center gap-2 rounded-lg border border-stone-200 px-3 py-2 text-sm dark:border-stone-800">
           <span className="min-w-0 flex-1"><span className="font-semibold">{m.name}</span> <span className="hint">{summary(m)}</span></span>
@@ -77,7 +79,7 @@ export function CharacterModules({ ids, selfWorldId, onChange }: { ids: string[]
 }
 
 /** 이야기의 모듈: 등장인물에 붙은 것 켜기·끄기 + 이 이야기에만 붙이기 */
-export function RoomModules({ characterIds, worldId, moduleIds, offModules, onChange }: { characterIds: string[]; worldId?: string; moduleIds: string[]; offModules: string[]; onChange: (p: { moduleIds: string[]; offModules: string[] }) => void }) {
+export function RoomModules({ characterIds, worldId, moduleIds, offModules, onChange, where = "이야기" }: { characterIds: string[]; worldId?: string; moduleIds: string[]; offModules: string[]; onChange: (p: { moduleIds: string[]; offModules: string[] }) => void; where?: string }) {
   const lib = useApp((s) => s.library);
   const summary = useModuleSummary();
   const fromChars = [...new Set(characterIds.flatMap((id) => (lib[id]?.kind === "character" ? lib[id].moduleIds ?? [] : [])))].filter((id) => id !== worldId);
@@ -103,7 +105,7 @@ export function RoomModules({ characterIds, worldId, moduleIds, offModules, onCh
           "등장인물에 붙은 모듈",
         ),
       )}
-      {own.map((id) => row(id, <button className="btn-ghost px-2 py-0.5 text-xs text-rose-600" onClick={() => onChange({ moduleIds: moduleIds.filter((x) => x !== id), offModules })}>떼기</button>, "이 이야기에만"))}
+      {own.map((id) => row(id, <button className="btn-ghost px-2 py-0.5 text-xs text-rose-600" onClick={() => onChange({ moduleIds: moduleIds.filter((x) => x !== id), offModules })}>떼기</button>, `이 ${where}에만`))}
       <AddModule exclude={[...fromChars, ...own, ...(worldId ? [worldId] : [])]} onAdd={(id) => onChange({ moduleIds: [...new Set([...moduleIds, id])], offModules: offModules.filter((x) => x !== id) })} />
     </div>
   );

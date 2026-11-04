@@ -1,7 +1,7 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { backupLibrary, backupNovels, download, isOwnBackup, makeBackup } from "../lib/backup";
 import { parseLegacyBackup, type LegacyImport } from "../lib/importLegacy";
-import { parseRisuFile, parseRisuJson, withSource, type RisuImport } from "../lib/risu";
+import { cardAsModule, parseRisuFile, parseRisuJson, withSource, type RisuImport } from "../lib/risu";
 import { listModels } from "../lib/modelList";
 import { testConnection } from "../lib/providers";
 import { CLAUDE_MODELS, GEMINI_MODELS, OPENAI_PRESETS, PROVIDER_LABEL } from "../lib/providers/catalog";
@@ -250,6 +250,11 @@ function DataTab() {
   const [importKeys, setImportKeys] = useState(true);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [risu, setRisu] = useState<RisuImport | null>(null);
+  // 캐릭터 카드를 모듈로 가져오기 (charx 형태로 배포된 그림·스크립트 모듈)
+  const risuModule = useMemo(() => (risu ? cardAsModule(risu) : null), [risu]);
+  const [asModule, setAsModule] = useState(false);
+  useEffect(() => setAsModule(false), [risu]);
+  const shown = asModule && risuModule ? risuModule : risu;
   const [greet, setGreet] = useState(-1); // -1: 이야기 만들지 않고 라이브러리에만 (인사말은 패키지에 보관)
   const [replace, setReplace] = useState(true); // 이미 가져온 같은 패키지가 있으면 교체
   const [progress, setProgress] = useState<{ label: string; pct: number | null } | null>(null);
@@ -321,8 +326,14 @@ function DataTab() {
             </div>
           </div>
         )}
-        {risu && <RisuPreview data={risu} greet={greet} setGreet={setGreet} replace={replace} setReplace={setReplace} onCancel={() => setRisu(null)} onImport={async () => {
-          const data = risu;
+        {risuModule && (
+          <label className="flex items-start gap-2 rounded-lg border border-violet-200 p-2 text-sm dark:border-violet-900">
+            <input type="checkbox" className="mt-1" checked={asModule} onChange={(e) => setAsModule(e.target.checked)} />
+            <span>🧩 모듈로 가져오기 <span className="hint block">그림·스크립트를 담으려고 캐릭터 카드 형태로 배포된 모듈이면 켜세요. 캐릭터 설명·인사말은 버리고 그림·로어북·정규식·트리거·배경만 모듈로 보관합니다. 라이브러리에서 다른 인물이나 이야기에 붙여 씁니다.</span></span>
+          </label>
+        )}
+        {shown && <RisuPreview data={shown} greet={greet} setGreet={setGreet} replace={replace} setReplace={setReplace} onCancel={() => setRisu(null)} onImport={async () => {
+          const data = shown;
           setRisu(null);
           setMsg(null);
           setProgress({ label: data.images.length ? `이미지 0 / ${data.images.length}장 저장 중` : "가져오는 중", pct: data.images.length ? 0 : null });
@@ -370,7 +381,7 @@ function RisuPreview({ data, greet, setGreet, replace, setReplace, onImport, onC
         <b>{data.source}</b>
         {names && <> · {names}</>}
         {data.library.some((e) => e.kind === "character") && " → 등장인물"}
-        {data.library.some((e) => e.kind === "world") && " → 세계관"}
+        {data.library.some((e) => e.kind === "world") && (data.source.startsWith("모듈(") || /모듈/.test(data.source) ? " → 🧩 모듈 (라이브러리 세계관 목록에 보관, 인물·이야기·소설에 붙여 씀)" : " → 세계관")}
         {lore > 0 && <> · 로어북 <b>{lore}</b>개</>}
         {data.rooms.length > 0 && <> · 대화 <b>{data.rooms.length}</b>개 → 이야기 (메시지 {data.rooms.reduce((n, r) => n + r.messages.length, 0)}개)</>}
       </div>

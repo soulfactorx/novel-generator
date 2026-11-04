@@ -154,6 +154,8 @@ export interface RisuImport {
   greeting?: RisuGreeting; // 첫 메시지로 이야기를 시작할 수 있음
   images: RisuImage[]; // 에셋·감정 이미지 (가져올 때 읽음)
   skipped: string[]; // 가져오지 않은 것
+  /** 캐릭터 카드를 모듈로 바꿀 때 쓰는 원본 (상시 로어를 설명에 합치기 전의 로어북 · 응답 직전 지시 원문) */
+  asModuleSource?: { lore: LoreEntry[]; post: string };
 }
 /** 가져올 이미지: 바이트는 가져오기를 누를 때 읽는다 (charx 안의 파일 등) */
 export interface RisuImage {
@@ -321,7 +323,8 @@ function cardToCharacter(cardIn: Any, source: string, moduleLore?: { module: Any
   const skipped = skippedOf({ ...risu, ...(moduleLore?.module || {}) }, other);
   // system_prompt는 RisuAI의 기본 프롬프트를 통째로 바꾸는 용도라 쓰지 않음 ({{original}}만 있으면 바꾸는 것이 없음)
   if (sys.replace(/\{\{original\}\}/gi, "").trim()) skipped.unshift("시스템 프롬프트(기본 프롬프트 교체)");
-  return { source, library: [ch], rooms: [], images, ...(greetings.length ? { greeting: { characterId: ch.id, name, greetings } } : {}), skipped };
+  const rawLore = (modLore.length ? modLore : fromCardLore(card.character_book?.entries, name)).map(({ late: _late, ...l }) => ({ ...l, content: fix(l.content) }));
+  return { source, library: [ch], rooms: [], images, ...(greetings.length ? { greeting: { characterId: ch.id, name, greetings } } : {}), skipped, asModuleSource: { lore: rawLore, post: fix(fillMacros(str(card.post_history_instructions), name)) } };
 }
 
 function chatsToRooms(j: Any): RisuImport {
@@ -396,6 +399,23 @@ const extOf = (name: string) => name.toLowerCase().split(".").pop() || "";
 export function withSource(r: RisuImport, file: string): RisuImport {
   const source = { kind: "risu" as const, file, format: r.source, importedAt: Date.now() };
   return { ...r, library: r.library.map((e) => (e.kind === "persona" ? e : { ...e, source })) };
+}
+
+/**
+ * 캐릭터 카드(charx 등)를 모듈로: 그림·로어북(상시 로어 포함)·정규식·트리거·토글·배경만 쓰고
+ * 캐릭터 설명·말투·인사말은 버린다 (그림·스크립트를 담으려고 껍데기 캐릭터로 배포되는 모듈).
+ * 캐릭터 카드가 아니면 null
+ */
+export function cardAsModule(r: RisuImport): RisuImport | null {
+  const c = r.library.find((e): e is Character => e.kind === "character");
+  if (!c || !r.asModuleSource) return null;
+  const id = uid("w");
+  const { onboarding: _ob, emotionPanel: _ep, ...risu } = c.risu ?? {};
+  const world: World = {
+    kind: "world", id, name: c.name, description: "", rules: r.asModuleSource.post.trim(), lore: r.asModuleSource.lore,
+    ...(c.scripts?.length ? { scripts: c.scripts } : {}), ...(Object.keys(risu).length ? { risu } : {}), ...(c.source ? { source: { ...c.source, format: `모듈(${c.source.format})` } } : {}), createdAt: c.createdAt, updatedAt: c.updatedAt,
+  };
+  return { source: `모듈(${r.source})`, library: [world], rooms: [], images: r.images.map((x) => ({ ...x, ownerId: id })), skipped: r.skipped };
 }
 
 /** 파일 하나를 판별해 가져오기 (charx · risum · json · png · charx-jpeg) */
