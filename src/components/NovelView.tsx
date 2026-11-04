@@ -7,6 +7,7 @@ import { formatUsd } from "../lib/pricing";
 import { contextFor, loadImageData, poolFor, deleteLastEpisode, diagnoseEpisode, dismissNovelError, getState, editEpisode, generateOutline, stopNovel, updateNovel, updateSettings, useApp, writeEpisode, writeEpisodes } from "../lib/store";
 import type { EpisodeLength, Novel } from "../lib/types";
 import CastPicker from "./CastPicker";
+import { RoomModules } from "./ModulePicker";
 import CoverPanel from "./CoverPanel";
 import RisuText from "./RisuText";
 import { htmlToBlocks, imagePool, renderRisu, type ImagePool } from "../lib/images";
@@ -111,6 +112,7 @@ function PlanTab({ novel: n, onOpenLibrary, onNext }: { novel: Novel; onOpenLibr
         <textarea className="input min-h-44" value={n.brief} onChange={(e) => up({ brief: e.target.value })} placeholder={"예) 비가 그치지 않는 항구 도시. 신입 조사관 도윤이 밀수 사건을 쫓다 조합의 비밀에 다가간다.\n- 감찰관 서율과는 처음엔 대립, 점점 신뢰\n- 중반에 도윤의 과거와 사건이 연결되는 반전\n- 결말은 씁쓸하지만 희망적으로"} aria-label="기획" />
       </F>
       <CastPicker value={{ worldId: n.worldId, characterIds: n.characterIds, personaId: n.personaId }} onChange={(c) => up(c)} onOpenLibrary={onOpenLibrary} personaLabel="🙋 주인공" />
+      <RoomModules characterIds={n.characterIds} worldId={n.worldId} moduleIds={n.moduleIds ?? []} offModules={n.offModules ?? []} onChange={(m) => up(m)} where="소설" />
       <div className="grid gap-3 sm:grid-cols-2">
         <F label={`목표 회차 수: ${n.episodeCount}화`}>
           <input type="range" min={1} max={50} value={Math.min(50, n.episodeCount)} onChange={(e) => up({ episodeCount: Number(e.target.value) })} className="w-full accent-violet-600" aria-label="회차 수" />

@@ -65,3 +65,40 @@ test("인물에 붙인 모듈의 그림·로어북·상시 설정·정규식이 
   expect((s.getState().library[cid] as Character).moduleIds).toEqual([]);
   expect(room().moduleIds).toEqual([]);
 });
+
+test("charx 형태의 모듈: 캐릭터 설명·인사말은 버리고 그림·로어북(상시 포함)·정규식·응답 직전 지시만 모듈로", async () => {
+  const { zip } = await import("../src/lib/exporters");
+  const { cardAsModule } = await import("../src/lib/risu");
+  const card = {
+    spec: "chara_card_v3",
+    data: {
+      name: "의상 에셋팩", description: "에셋용 캐릭터입니다", first_mes: "이 카드는 모듈입니다", post_history_instructions: "장면마다 <img=\"이름\">을 쓴다.",
+      character_book: { entries: [{ keys: [], content: "의상 규칙: 계절에 맞춘다.", constant: true, enabled: true, comment: "규칙" }, { keys: ["코트"], content: "코트는 회색.", enabled: true, comment: "코트" }] },
+      extensions: { risuai: { customScripts: [{ comment: "그림", in: "\\[옷:(.+?)\\]", out: "{{img::$1}}", type: "editdisplay" }] } },
+      assets: [{ type: "x-risu-asset", uri: "embeded://assets/other/image/코트.png", name: "코트", ext: "png" }],
+    },
+  };
+  const parsed = await parseRisuFile("에셋팩.charx", zip([{ name: "card.json", data: JSON.stringify(card) }, { name: "assets/other/image/코트.png", data: PNG }]));
+  const m = cardAsModule(parsed)!;
+  const w = m.library[0] as World;
+  expect(w.kind).toBe("world");
+  expect(w.name).toBe("의상 에셋팩");
+  expect(w.description).toBe(""); // 껍데기 캐릭터 설명은 버림
+  expect(w.rules).toBe('장면마다 <img="이름">을 쓴다.');
+  expect(w.lore.map((l) => [l.content, !!l.always])).toEqual([["의상 규칙: 계절에 맞춘다.", true], ["코트는 회색.", false]]);
+  expect(w.scripts?.length).toBe(1);
+  expect(m.greeting).toBeUndefined();
+  expect(m.images.map((x) => [x.name, x.ownerId === w.id])).toEqual([["코트", true]]);
+  expect(await m.images[0].load()).toEqual(PNG);
+  // 붙이면 다른 인물의 이야기에서 그림·상시 규칙이 함께 쓰인다
+  const s = await import("../src/lib/store");
+  await s.init();
+  await s.importRisu(m);
+  const cid = s.createEntity("character");
+  s.updateEntity<Character>(cid, { name: "서율", moduleIds: [w.id] });
+  const rid = s.createRoom({ characterIds: [cid] });
+  const room = s.getState().rooms[rid];
+  expect(renderRisu("[옷:코트]", s.poolFor(room)).html).toContain("nvimg:");
+  expect(buildSystemPrompt(s.getState().settings, room, s.contextFor(room))).toContain('## 모듈: 의상 에셋팩\n장면마다 <img="이름">을 쓴다.');
+  expect(cardAsModule(await parseRisuFile("모듈.risum", writeRisum({ name: "x", lorebook: [] })))).toBeNull(); // 카드가 아니면 null
+});
