@@ -18,7 +18,10 @@ export interface StoryContext {
   world?: World;
   characters: Character[];
   persona?: Persona;
+  modules?: World[]; // 붙인 모듈 (그림·로어북·스크립트·트리거·배경을 봇과 함께 씀)
 }
+/** 봇 요소(그림·스크립트·트리거·토글·배경·로어북)를 가진 것들: 등장인물 · 세계관 · 붙인 모듈 */
+export const ownersOf = (ctx: StoryContext): (Character | World)[] => [...ctx.characters, ...(ctx.world ? [ctx.world] : []), ...(ctx.modules ?? [])];
 
 export function buildSystemPrompt(s: Settings, room: Room, ctx: StoryContext = { characters: [] }, imageRules: string[] = []): string {
   // 봇이 자기 선택지를 직접 만들면(Lua로 선택지 버튼 등) 이 앱의 선택지 형식을 요구하지 않는다 — 봇의 출력 형식과 부딪힘
@@ -45,6 +48,11 @@ export function contextSections(ctx: StoryContext, mode: "chat" | "novel"): stri
   if (w) {
     parts.push("", P("ctx.world", { 이름: w.name, 설명: w.description.trim() }));
     if (w.rules.trim()) parts.push("", P("ctx.worldRules", { 내용: w.rules.trim() }));
+  }
+  for (const m of ctx.modules ?? []) {
+    // 모듈의 상시 로어(가져올 때 설명·규칙으로 옮겨진 것)
+    const body = [m.description.trim(), m.rules.trim()].filter(Boolean).join("\n\n");
+    if (body) parts.push("", P("ctx.module", { 이름: m.name, 내용: body }));
   }
   if (ctx.persona) parts.push("", P(mode === "chat" ? "ctx.personaChat" : "ctx.personaNovel", { 이름: ctx.persona.name, 프로필: ctx.persona.profile.trim() }));
   if (ctx.characters.length) {
@@ -80,7 +88,7 @@ export function buildHistory(room: Room, limit: number): { role: "user" | "assis
 /** 봇의 Lua가 선택지를 직접 다루는지 (예: 응답 끝 선택지 줄을 읽어 버튼으로 그림) */
 export function botHandlesChoices(ctx: StoryContext): boolean {
   const lua = (t: unknown) => ((t as { effect?: { type?: string; code?: string }[] })?.effect ?? []).filter((e) => e?.type === "triggerlua" && typeof e.code === "string").map((e) => e.code!);
-  return [...ctx.characters, ...(ctx.world ? [ctx.world] : [])].some((o) => (o.risu?.triggers ?? []).flatMap(lua).some((c) => /\bchoices?\b|선택지/i.test(c)));
+  return ownersOf(ctx).some((o) => (o.risu?.triggers ?? []).flatMap(lua).some((c) => /\bchoices?\b|선택지/i.test(c)));
 }
 
 /**

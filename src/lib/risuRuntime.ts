@@ -3,7 +3,7 @@
  * 프롬프트 · 대화 기록 · 출력 · 화면 표시에 적용한다.
  */
 import { parseCbs, parseKeyValue, parseToggles, risuUnescape, type CbsEnv, type Toggle } from "./cbs";
-import type { StoryContext } from "./prompt";
+import { ownersOf, type StoryContext } from "./prompt";
 import type { Character, ImageMeta, Message, Room, World } from "./types";
 
 export const USER_FALLBACK = "주인공";
@@ -20,7 +20,7 @@ export function chatIndexOf(messages: Message[], id: string): number {
   return rest.findIndex((m) => m.id === id);
 }
 
-const owners = (ctx: StoryContext): (Character | World)[] => [...ctx.characters, ...(ctx.world ? [ctx.world] : [])];
+const owners = (ctx: StoryContext): (Character | World)[] => ownersOf(ctx);
 
 /** 봇들의 기본 변수 */
 export function defaultVars(ctx: StoryContext): Record<string, string> {
@@ -86,6 +86,7 @@ export function processContext(ctx: StoryContext, env: CbsEnv): StoryContext {
   return {
     ...ctx,
     world: ctx.world && { ...ctx.world, description: t(ctx.world.description), rules: t(ctx.world.rules), lore: lore(ctx.world.lore) },
+    modules: ctx.modules?.map((m) => ({ ...m, description: t(m.description), rules: t(m.rules), lore: lore(m.lore) })),
     persona: ctx.persona && { ...ctx.persona, profile: t(ctx.persona.profile) },
     characters: ctx.characters.map((c) => ({ ...c, summary: t(c.summary), profile: t(c.profile), speech: t(c.speech), lore: lore(c.lore), ...(c.instructions ? { instructions: t(c.instructions) } : {}) })),
   };

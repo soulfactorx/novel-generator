@@ -6,6 +6,7 @@ import type { Character, Entity, EntityKind, Persona, World } from "../lib/types
 import Dialog from "./Dialog";
 import { useImageUrls } from "../lib/imageUrls";
 import LoreEditor from "./LoreEditor";
+import { CharacterModules } from "./ModulePicker";
 import { CreatorNotes, GreetingsEditor, ImageGallery, PackageBadge, PackageToggles, RisuSettings } from "./ImageGallery";
 
 const KINDS: [EntityKind, string, string][] = [
@@ -114,6 +115,7 @@ export default function LibraryDialog({ initialKind = "world", onClose }: { init
 const SECTIONS: [string, string, EntityKind[]][] = [
   ["lib-package", "패키지", ["world", "character"]],
   ["lib-basic", "기본 정보", ["world", "character", "persona"]],
+  ["lib-modules", "모듈", ["character"]],
   ["lib-greetings", "인사말", ["character"]],
   ["lib-lore", "로어북", ["world", "character"]],
   ["lib-images", "이미지", ["world", "character"]],
@@ -222,6 +224,7 @@ function CharacterForm({ c, worlds, onStart }: { c: Character; worlds: World[]; 
         <textarea className="input min-h-20" value={c.instructions ?? ""} onChange={(e) => up({ instructions: e.target.value })} aria-label="응답 직전 지시" />
       </F>
       </Section>
+      <Section id="lib-modules"><CharacterModules ids={c.moduleIds ?? []} selfWorldId={c.worldId} onChange={(moduleIds) => up({ moduleIds })} /></Section>
       <Section id="lib-greetings"><GreetingsEditor c={c} onStart={onStart} /></Section>
       <Section id="lib-lore"><LoreEditor entries={c.lore} onChange={(lore) => up({ lore })} /></Section>
       <Section id="lib-images"><ImageGallery ownerId={c.id} /></Section>

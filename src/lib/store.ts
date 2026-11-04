@@ -8,7 +8,7 @@ import { greetingRoom, type RisuImage, type RisuImport } from "./risu";
 import { buildEnv, cbs, chatIndexOf, processContext, processMessages, type EnvInput } from "./risuRuntime";
 import { formatLore, matchLore, type LoreHit } from "./lore";
 import { buildMemoryRequest, cleanMemory, pendingForMemory } from "./memory";
-import { botHandlesChoices, buildHistory, buildSystemPrompt, foldRequest, instructionsOf, outputTokensFor, type StoryContext } from "./prompt";
+import { botHandlesChoices, buildHistory, buildSystemPrompt, foldRequest, instructionsOf, outputTokensFor, ownersOf, type StoryContext } from "./prompt";
 import { P, setPromptOverrides } from "./prompts";
 import { generate, ProviderError, type GenerateRequest, type GenerateResult, type Usage } from "./providers";
 import { emptyUsage, recordUsage, type UsageData, type UsageKind } from "./usage";
@@ -325,11 +325,13 @@ export function deleteEntity(id: string) {
   dirty.library.delete(id);
   deleted.library.add(id);
   addTombstone(id);
+  const drop = (ids?: string[]) => (ids?.includes(id) ? ids.filter((x) => x !== id) : ids);
   for (const r of Object.values(state.rooms)) {
-    if (r.worldId === id || r.personaId === id || r.characterIds.includes(id))
-      putRoom({ ...r, worldId: r.worldId === id ? undefined : r.worldId, personaId: r.personaId === id ? undefined : r.personaId, characterIds: r.characterIds.filter((c) => c !== id) });
+    if (r.worldId === id || r.personaId === id || r.characterIds.includes(id) || r.moduleIds?.includes(id) || r.offModules?.includes(id))
+      putRoom({ ...r, worldId: r.worldId === id ? undefined : r.worldId, personaId: r.personaId === id ? undefined : r.personaId, characterIds: r.characterIds.filter((c) => c !== id), moduleIds: drop(r.moduleIds), offModules: drop(r.offModules) });
   }
-  for (const e of Object.values(state.library)) if (e.kind === "character" && e.worldId === id) putEntity({ ...e, worldId: undefined });
+  // 소속 세계관·붙인 모듈 연결도 해제
+  for (const e of Object.values(state.library)) if (e.kind === "character" && (e.worldId === id || e.moduleIds?.includes(id))) putEntity({ ...e, worldId: e.worldId === id ? undefined : e.worldId, moduleIds: drop(e.moduleIds) });
   const imgs = Object.values(state.images).filter((m) => m.ownerId === id).map((m) => m.id);
   if (imgs.length) void deleteImages(imgs);
   for (const n of Object.values(state.novels))
@@ -343,14 +345,24 @@ export function upsertLibrary(items: Entity[]) {
 export const entitiesOf = <K extends EntityKind>(lib: Record<string, Entity>, kind: K) =>
   (Object.values(lib).filter((e) => e.kind === kind) as Extract<Entity, { kind: K }>[]).sort((a, b) => a.name.localeCompare(b.name, "ko"));
 
-export function contextFor(room: Pick<Room, "worldId" | "personaId" | "characterIds">, lib = state.library): StoryContext {
+export function contextFor(room: Pick<Room, "worldId" | "personaId" | "characterIds"> & { moduleIds?: string[]; offModules?: string[] }, lib = state.library): StoryContext {
   const w = room.worldId ? lib[room.worldId] : undefined;
   const p = room.personaId ? lib[room.personaId] : undefined;
+  const characters = room.characterIds.map((id) => lib[id]).filter((c): c is Character => c?.kind === "character");
   return {
     world: w?.kind === "world" ? (w as World) : undefined,
     persona: p?.kind === "persona" ? (p as Persona) : undefined,
-    characters: room.characterIds.map((id) => lib[id]).filter((c): c is Character => c?.kind === "character"),
+    characters,
+    modules: modulesFor(room, characters, lib),
   };
+}
+/** 로어북 묶음: 세계관 · 등장인물 · 붙인 모듈 */
+const loreGroups = (ctx: StoryContext) => [...(ctx.world ? [{ source: ctx.world.name, entries: ctx.world.lore }] : []), ...ctx.characters.map((c) => ({ source: c.name, entries: c.lore })), ...(ctx.modules ?? []).map((m) => ({ source: m.name, entries: m.lore }))];
+/** 붙인 모듈: 등장인물에 붙은 것 + 이 이야기에 붙인 것 (이 이야기에서 끈 것·세계관과 같은 것 제외, 중복 없이) */
+export function modulesFor(room: { worldId?: string; moduleIds?: string[]; offModules?: string[] }, characters: Character[], lib = state.library): World[] {
+  const off = new Set(room.offModules ?? []);
+  const ids = [...new Set([...characters.flatMap((c) => c.moduleIds ?? []), ...(room.moduleIds ?? [])])].filter((id) => id !== room.worldId && !off.has(id));
+  return ids.map((id) => lib[id]).filter((m): m is World => m?.kind === "world");
 }
 
 export function importLegacy(data: LegacyImport, withKeys: boolean) {
@@ -498,7 +510,7 @@ export function displayCbs(room: Room, msgId: string | null): ((t: string) => st
 /** 이야기에 연결된 봇의 온보딩(시작 설정 화면) — 꺼져 있거나 내용이 없으면 null */
 export function onboardingFor(room: Pick<Room, "worldId" | "personaId" | "characterIds">): { owner: Character | World; onboarding: NonNullable<Character["risu"]>["onboarding"] & object } | null {
   const ctx = contextFor(room);
-  for (const o of [...ctx.characters, ...(ctx.world ? [ctx.world] : [])]) {
+  for (const o of ownersOf(ctx)) {
     const ob = o.risu?.onboarding;
     if (ob?.enabled && (ob.mode === "html" ? ob.html.trim() : ob.questions.length)) return { owner: o, onboarding: ob };
   }
@@ -585,7 +597,7 @@ function askDialog<T>(d: (resolve: (v: T) => void) => RisuDialog): Promise<T> {
 }
 function triggersOf(room: Pick<Room, "worldId" | "personaId" | "characterIds">) {
   const ctx = contextFor(room);
-  const owners = [...ctx.characters, ...(ctx.world ? [ctx.world] : [])];
+  const owners = ownersOf(ctx);
   return owners.flatMap((o) => (o.risu?.triggers ?? []).map((t) => ({ ...(t as object), lowLevelAccess: !!o.risu?.lowLevelAccess }) as { comment?: string; type?: string; conditions?: unknown[]; effect?: { type?: string; code?: string }[]; lowLevelAccess: boolean }));
 }
 /** 이야기방 → Lua·트리거가 다루는 형태 (첫 메시지 제외, 변수는 vars 객체에 기록) */
@@ -617,7 +629,7 @@ function hostFor(room: Room, vars: Record<string, string>) {
     personaDescription: ctx.persona?.profile,
     authorsNote: room.premise,
     backgroundEmbedding: c0?.risu?.backgroundHTML,
-    lore: [...ctx.characters, ...(ctx.world ? [ctx.world] : [])].flatMap((c) => c.lore.map((l) => ({ comment: l.title, content: l.content, key: l.keys.join(", "), alwaysActive: !!l.always, ...(l.enabled === false ? { enabled: false } : {}), ...(l.secondKeys?.length ? { selective: true, secondkey: l.secondKeys.join(", ") } : {}), ...(l.order ? { insertorder: l.order } : {}) }))),
+    lore: ownersOf(ctx).flatMap((c) => c.lore.map((l) => ({ comment: l.title, content: l.content, key: l.keys.join(", "), alwaysActive: !!l.always, ...(l.enabled === false ? { enabled: false } : {}), ...(l.secondKeys?.length ? { selective: true, secondkey: l.secondKeys.join(", ") } : {}), ...(l.order ? { insertorder: l.order } : {}) }))),
     llm: async (prompt: { role: string; content: string }[]) => {
       if (busyManual?.roomId === room.id) learnAiButton(room, busyManual.name); // 다음부터 이 버튼에 ✨AI 표시
       busyAi(1);
@@ -884,7 +896,7 @@ export async function regenerate(roomId: string, note = "") {
 
 /** 최근 대화에 등장한 로어북 항목 (세계관 + 등장인물) */
 export function loreFor(room: Room, ctx: StoryContext): LoreHit[] {
-  const groups = [...(ctx.world ? [{ source: ctx.world.name, entries: ctx.world.lore }] : []), ...ctx.characters.map((c) => ({ source: c.name, entries: c.lore }))];
+  const groups = loreGroups(ctx);
   if (!groups.some((g) => g.entries.length)) return [];
   const msgs = room.messages.filter((m) => !m.error);
   const recent = msgs.slice(-T("chat.loreScan")).map((m) => m.text);
@@ -1172,7 +1184,7 @@ export async function writeEpisode(novelId: string, index: number, note = "", un
     const ctx0 = contextFor(n);
     // RisuAI CBS: 소설은 이야기 변수가 없으므로 기본 변수·전역 변수(토글)로 설정 글을 정리
     const ctx = s.risu.cbs ? processContext(ctx0, buildEnv({ ctx: ctx0, globals: state.globals, images: Object.values(state.images), rmVar: true, seed: n.id })) : ctx0;
-    const groups = [...(ctx.world ? [{ source: ctx.world.name, entries: ctx.world.lore }] : []), ...ctx.characters.map((c) => ({ source: c.name, entries: c.lore }))];
+    const groups = loreGroups(ctx);
     const scan = [n.outline[index].title, n.outline[index].summary, n.episodes[index - 1]?.text.slice(-T("novel.tailChars") || Infinity) ?? ""].join("\n");
     const lore = groups.length ? formatLore(matchLore(groups, scan)) : "";
     const res = await callAI("episode", {

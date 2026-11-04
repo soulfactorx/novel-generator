@@ -78,6 +78,8 @@ export interface Room {
   worldId?: string;
   characterIds: string[];
   personaId?: string;
+  moduleIds?: string[]; // 이 이야기에만 붙인 모듈 (라이브러리의 세계관·RisuAI 모듈)
+  offModules?: string[]; // 등장인물에 붙은 모듈 중 이 이야기에서는 끈 것
   memoryCursorAt?: number; // 이 시각(createdAt) 이전 메시지까지 장기 기억에 반영됨
   memoryUpdatedAt?: number;
   branchOf?: { roomId: string; messageId: string; title: string }; // 분기해 온 원래 이야기
@@ -124,6 +126,7 @@ export interface Character extends EntityBase {
   speech: string; // 말투·대사 예시
   lore: LoreEntry[];
   worldId?: string; // 소속 세계관 (선택)
+  moduleIds?: string[]; // 붙인 모듈 (RisuAI 모듈 등, 이 인물이 나오는 모든 이야기에 적용)
   scripts?: RegexScript[]; // RisuAI 캐릭터의 정규식 스크립트
   instructions?: string; // 응답 직전에 AI에게 주는 지시 (RisuAI post_history_instructions · @@depth 0 로어)
   greetings?: string[]; // 첫 메시지(인사말) 목록 — 새 이야기를 이 중 하나로 시작
@@ -295,6 +298,8 @@ export interface Novel {
   worldId?: string;
   characterIds: string[];
   personaId?: string; // 주인공
+  moduleIds?: string[]; // 이 소설에만 붙인 모듈
+  offModules?: string[];
   episodeCount: number; // 목표 회차 수
   episodeLength: EpisodeLength;
   outline: OutlineItem[]; // outline[i] ↔ episodes[i]

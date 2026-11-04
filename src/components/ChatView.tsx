@@ -8,6 +8,7 @@ import { PROVIDER_LABEL } from "../lib/providers/catalog";
 import MessageView from "./Message";
 import RisuText from "./RisuText";
 import { imagePool } from "../lib/images";
+import { ownersOf } from "../lib/prompt";
 import { BgmButton, EmotionPanel, RisuBackground } from "./RisuStage";
 import { stopBgm } from "../lib/bgm";
 import RoomDialog from "./RoomDialog";
@@ -75,7 +76,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
   }
   // 봇의 배경 HTML·CSS (RisuAI backgroundHTML): 이 이야기 화면 안에서만 적용
   const bgScope = `rsbg${room.id.replace(/[^a-z0-9]/gi, "")}`;
-  const bgSrc = settings.risu.background ? [...ctx.characters, ...(ctx.world ? [ctx.world] : [])].map((o) => o.risu?.backgroundHTML ?? "").filter((x) => x.trim()).join("\n") : "";
+  const bgSrc = settings.risu.background ? ownersOf(ctx).map((o) => o.risu?.backgroundHTML ?? "").filter((x) => x.trim()).join("\n") : "";
   const myMemory = memoryJob?.roomId === room.id ? memoryJob : null;
   const submit = (text: string) => {
     // 빈 입력도 보낼 수 있음: 첫 장면 시작, 내 메시지(봇 선택지 버튼 등)에 대한 응답, 또는 앞 내용에 이어서 다음 전개

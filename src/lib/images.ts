@@ -7,7 +7,7 @@
  */
 import { T } from "./tuning";
 import { P } from "./prompts";
-import type { StoryContext } from "./prompt";
+import { ownersOf, type StoryContext } from "./prompt";
 import type { ImageMeta, RegexScript } from "./types";
 
 /* ---------------- 이 이야기에서 쓸 수 있는 이미지 ---------------- */
@@ -21,7 +21,7 @@ export interface ImagePool {
 const poolCache = new WeakMap<object, Map<string, ImagePool>>();
 /** 같은 이미지 목록·같은 인물(수정 시각 포함)이면 같은 객체를 돌려준다 (화면 다시 그리기 최소화) */
 export function imagePool(ctx: StoryContext, images: Record<string, ImageMeta> | ImageMeta[], scripts = true): ImagePool {
-  const owners = [...ctx.characters, ...(ctx.world ? [ctx.world] : [])];
+  const owners = ownersOf(ctx);
   const key = owners.map((o) => `${o.id}:${o.updatedAt}`).join(",") + (scripts ? "" : "|noscripts");
   let byKey = poolCache.get(images);
   if (!byKey) poolCache.set(images, (byKey = new Map()));
@@ -411,7 +411,7 @@ const RULE_HINT = /\{\{(?:img|image|asset|emotion|raw|path|bg)::|<img\b|<Emotion
 /** 봇 스스로 그림 쓰는 법을 정해 두었는지 (설명·로어북·스크립트에 그림 표시가 있으면) */
 export function hasOwnImageRules(ctx: StoryContext, pool: ImagePool): boolean {
   if (pool.scripts.some((s) => s.type !== "editinput" && (RULE_HINT.test(s.out) || /nvimg|<img/i.test(s.out)))) return true;
-  const texts = [...ctx.characters.flatMap((c) => [c.profile, c.speech, c.instructions ?? "", ...c.lore.map((l) => l.content)]), ...(ctx.world ? [ctx.world.description, ctx.world.rules, ...ctx.world.lore.map((l) => l.content)] : [])];
+  const texts = [...ctx.characters.flatMap((c) => [c.profile, c.speech, c.instructions ?? "", ...c.lore.map((l) => l.content)]), ...[ctx.world, ...(ctx.modules ?? [])].filter((w): w is NonNullable<typeof w> => !!w).flatMap((w) => [w.description, w.rules, ...w.lore.map((l) => l.content)])];
   return texts.some((t) => RULE_HINT.test(t));
 }
 
