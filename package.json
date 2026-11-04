@@ -1,6 +1,10 @@
 {
   "name": "novel-generator",
+<<<<<<< HEAD
   "version": "0.19.0",
+=======
+  "version": "0.18.0",
+>>>>>>> origin/main
   "private": true,
   "description": "AI 소설·롤플레이 창작 스튜디오 — 브라우저 단독 실행, 단일 HTML 빌드",
   "license": "AGPL-3.0-or-later",
