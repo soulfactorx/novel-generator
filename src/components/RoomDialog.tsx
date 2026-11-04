@@ -3,6 +3,7 @@ import { memoryBatch, pendingForMemory } from "../lib/memory";
 import { getState, updateMemory, updateRoom, updateSettings, useApp } from "../lib/store";
 import type { Room } from "../lib/types";
 import CastPicker, { type Cast } from "./CastPicker";
+import { RoomModules } from "./ModulePicker";
 import Dialog from "./Dialog";
 
 export default function RoomDialog({ room, onClose, onOpenLibrary, initialTab = "cast" }: { room: Room; onClose: () => void; onOpenLibrary: () => void; initialTab?: "cast" | "memory" }) {
@@ -10,13 +11,14 @@ export default function RoomDialog({ room, onClose, onOpenLibrary, initialTab = 
   const [premise, setPremise] = useState(room.premise);
   const [memory, setMemory] = useState(room.memory);
   const [cast, setCast] = useState<Cast>({ worldId: room.worldId, characterIds: room.characterIds, personaId: room.personaId });
+  const [mods, setMods] = useState({ moduleIds: room.moduleIds ?? [], offModules: room.offModules ?? [] });
   const settings = useApp((s) => s.settings);
   const job = useApp((s) => (s.memoryJob?.roomId === room.id ? s.memoryJob : null));
   const live = useApp((s) => s.rooms[room.id]);
   const [note, setNote] = useState("");
   const save = () => {
     // 대화상자가 열려 있는 동안 자동 정리로 바뀐 기억을 덮어쓰지 않도록, 직접 고친 경우에만 저장
-    updateRoom(room.id, { premise, ...(memory !== room.memory ? { memory } : {}), worldId: cast.worldId, characterIds: cast.characterIds, personaId: cast.personaId });
+    updateRoom(room.id, { premise, ...(memory !== room.memory ? { memory } : {}), worldId: cast.worldId, characterIds: cast.characterIds, personaId: cast.personaId, moduleIds: mods.moduleIds, offModules: mods.offModules });
     onClose();
   };
   const pending = live ? pendingForMemory(live, settings.contextMessages, "manual").length : 0;
@@ -42,6 +44,7 @@ export default function RoomDialog({ room, onClose, onOpenLibrary, initialTab = 
       {tab === "cast" ? (
         <div className="space-y-4">
           <CastPicker value={cast} onChange={setCast} onOpenLibrary={onOpenLibrary} />
+          <RoomModules characterIds={cast.characterIds} worldId={cast.worldId} moduleIds={mods.moduleIds} offModules={mods.offModules} onChange={setMods} />
           <div>
             <label className="label" htmlFor="premise">이 이야기만의 추가 설정</label>
             <textarea id="premise" className="input min-h-40" value={premise} onChange={(e) => setPremise(e.target.value)} placeholder={"라이브러리에 없는 설정이나 시작 상황을 적어 두세요.\n예) 배경: 비가 자주 오는 항구 도시, 현대\n서도윤(24): 신입 기자. 호기심이 많고 말이 빠르다."} />
