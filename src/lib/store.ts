@@ -831,6 +831,8 @@ export function importLegacyExtra(): number {
 }
 
 /* ---------------- AI 호출 공통: 대체 모델 + 사용량 집계 ---------------- */
+/** AI가 응답을 길이 한도 때문에 끊었는지 */
+const isCut = (r?: string) => r === "max_tokens" || r === "length" || r === "MAX_TOKENS";
 const FALLBACK_KINDS = new Set(["rate", "server", "network"]);
 export const hasKeyFor = (s: Settings, p: Settings["provider"]) => (p === "openai" ? !!s.keys.openai || /localhost|127\.0\.0\.1/.test(s.openaiBaseUrl) : !!s.keys[p]);
 
@@ -862,9 +864,25 @@ export async function callAI(kind: UsageKind, req: Omit<GenerateRequest, "settin
     scheduleSave();
     return { input: res.usage.input, output: res.usage.output, ...(res.usage.cacheRead ? { cacheRead: res.usage.cacheRead } : {}), ...(usd !== null ? { usd } : {}) };
   };
+  /**
+   * 생각(사고)만 하다 출력 한도를 다 써서 본문이 비면 한 번 더: 한도를 두 배로 늘리고 생각을 줄여 달라고 요청한다.
+   * (OpenRouter·DeepSeek 같은 OpenAI 호환 API는 생각 토큰도 출력 한도에 포함된다)
+   */
+  const run = async (st: Settings, provider: Settings["provider"]): Promise<{ res: GenerateResult; cost?: MessageUsage }> => {
+    const res = await generate({ ...req, settings: st });
+    const cost = record(provider, res);
+    if (res.text.trim() || !isCut(res.stopReason) || !res.thinking?.trim() || req.signal?.aborted) return { res, cost };
+    const more = Math.min(req.maxTokens * 2 + 8000, 128000);
+    opts.onRestart?.();
+    req.onStatus?.(`AI가 생각만 하다 출력 한도(${req.maxTokens.toLocaleString()}토큰)를 다 써서 본문이 없었습니다 → 한도를 ${more.toLocaleString()}토큰으로 늘리고 생각을 줄여 다시 요청합니다`);
+    const res2 = await generate({ ...req, maxTokens: more, lessThinking: true, settings: st });
+    const cost2 = record(provider, res2);
+    const sum = cost && cost2 ? { ...cost2, input: cost.input + cost2.input, output: cost.output + cost2.output, ...(cost.usd !== undefined || cost2.usd !== undefined ? { usd: (cost.usd ?? 0) + (cost2.usd ?? 0) } : {}) } : (cost2 ?? cost);
+    return { res: { ...res2, thinking: res2.thinking || res.thinking }, cost: sum };
+  };
   try {
-    const res = await generate({ ...req, settings: s });
-    return { ...res, usedFallback: false, cost: record(s.provider, res) };
+    const { res, cost } = await run(s, s.provider);
+    return { ...res, usedFallback: false, cost };
   } catch (e) {
     const err = e as ProviderError;
     const same = fb.provider === s.provider && fb.model === s.models[s.provider];
@@ -872,8 +890,8 @@ export async function callAI(kind: UsageKind, req: Omit<GenerateRequest, "settin
     opts.onRestart?.();
     req.onStatus?.(`기본 모델 오류(${err.message.slice(0, 60)}) → 대체 모델 ${PROVIDER_LABEL[fb.provider]} · ${fb.model}로 다시 시도합니다`);
     const s2: Settings = { ...s, provider: fb.provider, models: { ...s.models, [fb.provider]: fb.model } };
-    const res = await generate({ ...req, settings: s2 });
-    return { ...res, usedFallback: true, cost: record(fb.provider, res) };
+    const { res, cost } = await run(s2, fb.provider);
+    return { ...res, usedFallback: true, cost };
   }
 }
 
@@ -1151,8 +1169,6 @@ const PROVIDER_HINT: Record<ProviderError["kind"], string> = {
 };
 export const hintForError = (e: unknown): string | undefined => (e as { hint?: string })?.hint ?? (e instanceof ProviderError ? PROVIDER_HINT[e.kind] : undefined);
 
-/** AI가 응답을 길이 한도 때문에 끊었는지 */
-const isCut = (r?: string) => r === "max_tokens" || r === "length" || r === "MAX_TOKENS";
 
 /** 개요 생성. from: 이 회차(0부터)부터 다시 짠다 (앞부분 유지) */
 export async function generateOutline(novelId: string, from = 0): Promise<boolean> {
@@ -1175,7 +1191,7 @@ export async function generateOutline(novelId: string, from = 0): Promise<boolea
     step("AI에게 요청 보내는 중");
     res = await callAI("outline", {
       ...req,
-      maxTokens: Math.min(T("novel.outlineTokens"), 1500 + total * 400),
+      maxTokens: Math.max(T("novel.outlineTokens"), 1500 + total * 400), // 설정값이 한도 (생각하는 모델은 생각도 이 안에서 씀)
       signal: novelController.signal,
       onText: (d) => {
         streamed += d;
@@ -1191,7 +1207,7 @@ export async function generateOutline(novelId: string, from = 0): Promise<boolea
     const cut = isCut(res.stopReason);
     if (!items.length) {
       const why = !text.trim()
-        ? { message: "AI가 빈 응답을 보냈습니다.", hint: cut ? "생각(사고)에 출력 한도를 다 써서 본문이 없었습니다. [설정 → 세부 수치]에서 '개요 응답 최대 길이'를 늘리거나 사고를 덜 하는 모델로 바꿔 보세요." : "안전 정책·일시적 오류일 수 있습니다. 다시 시도하거나 모델을 바꿔 보세요." }
+        ? { message: "AI가 빈 응답을 보냈습니다.", hint: cut ? "AI가 생각(사고)에 출력 한도를 다 써서 본문을 못 썼습니다. 한도를 늘려 한 번 더 요청했는데도 같았습니다. 생각을 하지 않는(또는 덜 하는) 모델로 바꾸거나, [설정 → 세부 수치]에서 '개요 응답 최대 길이'를 더 늘리거나, 회차 수를 줄여 보세요." : "안전 정책·일시적 오류일 수 있습니다. 다시 시도하거나 모델을 바꿔 보세요." }
         : { message: "AI 응답에서 회차 개요를 찾지 못했습니다.", hint: "AI가 \"[1화] 제목\" 형식 대신 다른 글(봇 설정의 상태창·질문·이야기 본문 등)을 썼습니다. 아래 응답을 확인하고 다시 시도해 보세요. [기획]에 시놉시스를 적어 주면 더 잘 따릅니다." };
       throw Object.assign(new Error(why.message), { hint: why.hint });
     }

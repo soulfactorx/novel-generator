@@ -44,7 +44,7 @@ export const TUNE_DEFS: TuneDef[] = [
   t(G_NOVEL, "novel.tokens.medium", "회차 응답 최대 길이 · 보통", 9000, 1000, 64000, { step: 500, unit: "토큰" }),
   t(G_NOVEL, "novel.tokens.long", "회차 응답 최대 길이 · 길게", 14000, 1000, 64000, { step: 500, unit: "토큰" }),
   t(G_NOVEL, "novel.tailChars", "이어 쓸 때 보여 줄 직전 회차 끝부분", 1500, 0, 20000, { step: 100, unit: "자" }),
-  t(G_NOVEL, "novel.outlineTokens", "개요 응답 최대 길이", 16000, 2000, 64000, { step: 500, unit: "토큰", hint: "회차가 많을수록 길어집니다 (회차당 약 250토큰 + 1,500, 이 값을 넘지 않음)." }),
+  t(G_NOVEL, "novel.outlineTokens", "개요 응답 최대 길이", 16000, 2000, 64000, { step: 500, unit: "토큰", hint: "개요 한 번의 출력 한도입니다. 생각(사고)하는 모델은 생각도 이 안에서 씁니다. 생각만 하다 한도를 다 쓰면 두 배로 늘려 한 번 더 요청합니다." }),
 
   t(G_DIAG, "diagnose.recent", "진단할 최근 메시지 수", 16, 2, 200, { unit: "개" }),
   t(G_DIAG, "diagnose.tokens", "진단 응답 최대 길이", 3000, 500, 32000, { step: 100, unit: "토큰" }),
