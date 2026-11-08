@@ -80,4 +80,13 @@ describe("OpenAI-compatible", () => {
     expect(calls[0].body.max_completion_tokens).toBeGreaterThan(3500);
     expect(r2.text).toBe("일반");
   });
+  test("lessThinking asks OpenRouter for low reasoning; too-large max_tokens is lowered once", async () => {
+    let calls = mockFetch(json({ choices: [{ message: { content: "ok" } }] }));
+    await generate({ ...base, lessThinking: true, settings: S({ provider: "openai", streaming: false }) });
+    expect(calls[0].body.reasoning).toEqual({ effort: "low" });
+    calls = mockFetch(json({ error: { message: "max_tokens is too large: 40000. This model supports at most 8192 completion tokens" } }, 400), json({ choices: [{ message: { content: "줄임" } }] }));
+    const r = await generate({ ...base, maxTokens: 40000, settings: S({ provider: "openai", streaming: false }) });
+    expect(calls[1].body.max_tokens).toBe(8192);
+    expect(r.text).toBe("줄임");
+  });
 });

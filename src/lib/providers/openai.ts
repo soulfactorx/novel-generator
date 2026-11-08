@@ -21,18 +21,32 @@ export async function generateOpenAI(req: GenerateRequest): Promise<GenerateResu
     messages: [{ role: "system", content: req.system }, ...req.messages],
     ...(reasoning ? { max_completion_tokens: req.maxTokens + 8000 } : { max_tokens: req.maxTokens, temperature: s.temperature }),
   };
+  if (req.lessThinking) {
+    // OpenRouter는 모델과 상관없이 reasoning 설정을 받는다. OpenAI 추론 모델은 reasoning_effort
+    if (/openrouter\.ai/i.test(s.openaiBaseUrl || "https://openrouter.ai")) base.reasoning = { effort: "low" };
+    else if (reasoning) base.reasoning_effort = "low";
+  }
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (key) headers.authorization = `Bearer ${key}`;
   const url = apiRoot(s.openaiBaseUrl) + "/chat/completions";
   let stream = s.streaming;
+  let shrunk = false;
   let res: Response;
   for (;;) {
     const body = stream ? { ...base, stream: true, ...(/openai\.com|openrouter\.ai/.test(url) ? { stream_options: { include_usage: true } } : {}) } : base;
     res = await fetchRetry(url, { method: "POST", headers, body: JSON.stringify(body) }, { signal: req.signal, onStatus: req.onStatus, label: "API" });
-    if (!res.ok && stream && res.status === 400) {
+    if (!res.ok && res.status === 400) {
       const e = await errorBody(res.clone());
-      if (/stream/i.test(e.message)) {
+      if (stream && /stream/i.test(e.message)) {
         stream = false; // 스트리밍 미지원 모델/계정 → 일반 요청으로 재시도
+        continue;
+      }
+      // 출력 한도가 모델 최대보다 크면 메시지에 나온 최대값(없으면 절반)으로 한 번 줄여서 다시
+      const lim = reasoning ? "max_completion_tokens" : "max_tokens";
+      if (!shrunk && /max_(completion_)?tokens|maximum.*(output|completion)|too (large|many).*tokens/i.test(e.message) && typeof base[lim] === "number") {
+        shrunk = true;
+        const nums = [...e.message.matchAll(/\d{3,7}/g)].map(Number).filter((n) => n < (base[lim] as number));
+        base[lim] = nums.length ? Math.max(...nums) : Math.floor((base[lim] as number) / 2);
         continue;
       }
     }

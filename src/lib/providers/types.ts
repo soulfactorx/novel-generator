@@ -15,6 +15,8 @@ export interface GenerateRequest {
   system: string;
   messages: ChatMessage[];
   maxTokens: number;
+  /** 생각(사고)을 줄여 달라고 요청 (생각만 하다 출력 한도를 다 쓴 뒤 다시 시도할 때) */
+  lessThinking?: boolean;
   signal?: AbortSignal;
   onText?: (delta: string) => void;
   onThinking?: (delta: string) => void;
