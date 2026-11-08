@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { CHOICE_MARKER, previewText, splitChoices } from "./choices";
 import { deleteKV, getImageData, loadAll, putImages, putKV, putRecords, requestPersist, wipeDatabase } from "./db";
-import { hasOwnImageRules, imagePool, imagePromptSection, runScripts, shrinkImage, sniffMedia, uniqueName, type ImagePool } from "./images";
+import { hasOwnImageRules, imagePool, novelPool, imagePromptSection, runScripts, shrinkImage, sniffMedia, uniqueName, type ImagePool } from "./images";
 import { uid } from "./id";
 import { libraryFromExtra, type LegacyImport } from "./importLegacy";
 import { greetingRoom, type RisuImage, type RisuImport } from "./risu";
@@ -821,6 +821,8 @@ export function setRoomVar(roomId: string, key: string, value: string | null) {
 
 /** 이야기·소설에서 쓸 수 있는 이미지와 봇의 정규식 스크립트 */
 export const poolFor = (target: Pick<Room, "worldId" | "personaId" | "characterIds">): ImagePool => imagePool(contextFor(target), state.images, state.settings.risu.scripts);
+/** 소설용: 채팅 화면 UI 스크립트(상태창·폰 화면 등)는 그리지 않고 지운다 */
+export const novelPoolFor = (n: Novel): ImagePool => novelPool(poolFor(n));
 /** v0.1 에서 보관만 해 둔 세계관·캐릭터를 라이브러리로 */
 export function importLegacyExtra(): number {
   const items = state.legacyExtra ? libraryFromExtra(state.legacyExtra) : [];
@@ -1241,6 +1243,20 @@ export async function generateOutline(novelId: string, from = 0): Promise<boolea
   }
 }
 
+/**
+ * 소설의 CBS: 소설에는 이야기 변수가 없으므로 기본 변수·전역 변수(토글)로 계산한다.
+ * 봇의 표시 스크립트가 만든 {{getvar}} · {{#when}} 이 글자 그대로 남지 않게 읽기 화면·내보내기·저장에 쓴다.
+ */
+export function novelCbs(n: Novel): ((s: string) => string) | undefined {
+  if (!state.settings.risu.cbs) return undefined;
+  let env: ReturnType<typeof buildEnv> | null = null;
+  return (s: string) => {
+    if (!s.includes("{{")) return s;
+    env ??= buildEnv({ ctx: contextFor(n), globals: state.globals, images: Object.values(state.images), seed: n.id });
+    return cbs(s, env);
+  };
+}
+
 /** 한 회차 집필 (이미 있으면 다시 쓰기). 앞 회차가 비어 있으면 불가 */
 export async function writeEpisode(novelId: string, index: number, note = "", until?: number): Promise<boolean> {
   const n = state.novels[novelId];
@@ -1252,10 +1268,10 @@ export async function writeEpisode(novelId: string, index: number, note = "", un
   setState({ novelLive: { novelId, task: "episode", index, until, text: "", thinking: "", status: "", startedAt }, novelError: null });
   void holdWake();
   let streamed = "", thoughtLen = 0;
-  const pool = poolFor(n);
+  const pool = novelPoolFor(n);
   const save = (raw: string, model: string, incomplete: boolean, usage?: MessageUsage) => {
     const { text: body, summary } = splitEpisode(raw);
-    const text = runScripts(body, pool.scripts, "editoutput").text.trim(); // 봇의 출력 스크립트
+    const text = runScripts(body, pool.scripts, "editoutput", novelCbs(n)).text.trim(); // 봇의 출력 스크립트
     const cur = state.novels[novelId];
     if (!cur || !text) return;
     const now = Date.now();

@@ -4,14 +4,14 @@ import { charCount, EPISODE_LENGTHS, episodeLength } from "../lib/novel";
 import { uid } from "../lib/id";
 import DiagnosisDialog from "./DiagnosisDialog";
 import { formatUsd } from "../lib/pricing";
-import { contextFor, loadImageData, poolFor, deleteLastEpisode, diagnoseEpisode, dismissNovelError, getState, editEpisode, generateOutline, stopNovel, updateNovel, updateSettings, useApp, writeEpisode, writeEpisodes } from "../lib/store";
+import { contextFor, loadImageData, novelCbs, novelPoolFor, deleteLastEpisode, diagnoseEpisode, dismissNovelError, getState, editEpisode, generateOutline, stopNovel, updateNovel, updateSettings, useApp, writeEpisode, writeEpisodes } from "../lib/store";
 import type { EpisodeLength, Novel } from "../lib/types";
 import type { NovelError, NovelLive } from "../lib/store";
 import CastPicker from "./CastPicker";
 import { RoomModules } from "./ModulePicker";
 import CoverPanel from "./CoverPanel";
 import RisuText from "./RisuText";
-import { htmlToBlocks, imagePool, renderRisu, type ImagePool } from "../lib/images";
+import { htmlToBlocks, imagePool, novelPool, renderRisu, type ImagePool } from "../lib/images";
 
 type Tab = "plan" | "outline" | "manuscript";
 
@@ -285,7 +285,7 @@ function ManuscriptTab({ novel: n, live, busy, onRead, onOutline, onOpenSettings
       {live ? (
         <div className="space-y-3 border-t border-stone-200 pt-4 dark:border-stone-800">
           <LiveHeader label={`${live.index + 1}화 「${n.outline[live.index]?.title ?? ""}」 집필 중${live.until !== undefined && live.until > live.index ? ` (${live.until + 1}화까지 연속)` : ""}`} live={live} />
-          {live.text ? <RisuText text={live.text} pool={poolFor(n)} /> : live.thinking && <div className="line-clamp-4 text-xs italic text-stone-500">{live.thinking.slice(-400)}</div>}
+          {live.text ? <RisuText text={live.text} pool={novelPoolFor(n)} cbs={novelCbs(n)} /> : live.thinking && <div className="line-clamp-4 text-xs italic text-stone-500">{live.thinking.slice(-400)}</div>}
           <div ref={endRef} />
         </div>
       ) : (
@@ -313,7 +313,7 @@ function Reader({ novel: n, index, busy, onIndex, onClose }: { novel: Novel; ind
   const lib = useApp((s) => s.library);
   const images = useApp((s) => s.images);
   const scriptsOn = useApp((s) => s.settings.risu.scripts);
-  const pool = imagePool(contextFor(n, lib), images, scriptsOn);
+  const pool = novelPool(imagePool(contextFor(n, lib), images, scriptsOn));
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(e.text);
   const [rewrite, setRewrite] = useState<string | null>(null);
@@ -344,7 +344,7 @@ function Reader({ novel: n, index, busy, onIndex, onClose }: { novel: Novel; ind
           </div>
         </div>
       ) : (
-        <div style={{ fontSize }}><RisuText text={e.text} pool={pool} /></div>
+        <div style={{ fontSize }}><RisuText text={e.text} pool={pool} cbs={novelCbs(n)} /></div>
       )}
       {diag && <DiagnosisDialog title={`🩺 ${index + 1}화 진단`} run={(onText) => diagnoseEpisode(n.id, index, onText)} applyLabel="진단 반영해 다시 쓰기" canApply={!busy} onApply={(d) => setRewrite(d)} onClose={() => setDiag(false)} />}
       {e.summary && !editing && <details className="hint"><summary className="cursor-pointer">이 회차 요약 (다음 회차 집필에 사용)</summary><textarea className="input mt-2 min-h-20 text-xs" value={e.summary} onChange={(x) => editEpisode(n.id, index, { summary: x.target.value })} aria-label="회차 요약" /></details>}
@@ -384,8 +384,8 @@ function ExportMenu({ novel: n }: { novel: Novel }) {
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div className="absolute right-0 z-20 mt-1 w-52 rounded-xl border border-stone-200 bg-white p-1 shadow-lg dark:border-stone-800 dark:bg-stone-900">
-            <button className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-stone-100 dark:hover:bg-stone-800" onClick={() => { setOpen(false); void exportImages(poolFor(n), n).then((ex) => downloadBlob(`${name}.epub`, novelToEpub(n, new Date(), ex) as BlobPart, "application/epub+zip")); }}>📚 EPUB (전자책)</button>
-            <button className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-stone-100 dark:hover:bg-stone-800" onClick={() => { setOpen(false); void exportImages(poolFor(n), n, false).then((ex) => downloadBlob(`${name}.txt`, novelToTxt(n, ex), "text/plain;charset=utf-8")); }}>📄 TXT (텍스트)</button>
+            <button className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-stone-100 dark:hover:bg-stone-800" onClick={() => { setOpen(false); void exportImages(novelPoolFor(n), n).then((ex) => downloadBlob(`${name}.epub`, novelToEpub(n, new Date(), ex) as BlobPart, "application/epub+zip")); }}>📚 EPUB (전자책)</button>
+            <button className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-stone-100 dark:hover:bg-stone-800" onClick={() => { setOpen(false); void exportImages(novelPoolFor(n), n, false).then((ex) => downloadBlob(`${name}.txt`, novelToTxt(n, ex), "text/plain;charset=utf-8")); }}>📄 TXT (텍스트)</button>
           </div>
         </>
       )}
@@ -397,7 +397,8 @@ function ExportMenu({ novel: n }: { novel: Novel }) {
 async function exportImages(pool: ImagePool, n: Novel, withBytes = true): Promise<ExportImages | undefined> {
   if (!pool.assets.length && !pool.emotions.length && !pool.scripts.length) return undefined;
   const ids = new Set<string>();
-  n.episodes.forEach((e) => renderRisu(e.text, pool).ids.forEach((id) => ids.add(id)));
+  const cbs = novelCbs(n);
+  n.episodes.forEach((e) => renderRisu(e.text, pool, cbs).ids.forEach((id) => ids.add(id)));
   const images: ExportImages["images"] = {};
   const metas = getState().images;
   if (withBytes)
@@ -405,5 +406,5 @@ async function exportImages(pool: ImagePool, n: Novel, withBytes = true): Promis
       const bytes = await loadImageData(id).catch(() => null);
       if (bytes && metas[id]) images[id] = { bytes, mime: metas[id].mime };
     }
-  return { blocks: (text) => htmlToBlocks(renderRisu(text, pool).html), images };
+  return { blocks: (text) => htmlToBlocks(renderRisu(text, pool, cbs).html), images };
 }
