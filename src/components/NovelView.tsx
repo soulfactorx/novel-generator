@@ -6,6 +6,7 @@ import DiagnosisDialog from "./DiagnosisDialog";
 import { formatUsd } from "../lib/pricing";
 import { contextFor, loadImageData, poolFor, deleteLastEpisode, diagnoseEpisode, dismissNovelError, getState, editEpisode, generateOutline, stopNovel, updateNovel, updateSettings, useApp, writeEpisode, writeEpisodes } from "../lib/store";
 import type { EpisodeLength, Novel } from "../lib/types";
+import type { NovelError, NovelLive } from "../lib/store";
 import CastPicker from "./CastPicker";
 import { RoomModules } from "./ModulePicker";
 import CoverPanel from "./CoverPanel";
@@ -48,7 +49,6 @@ export default function NovelView({ onMenu, onOpenLibrary, onOpenSettings }: { o
     );
 
   const mine = live?.novelId === novel.id ? live : null;
-  const myError = error?.novelId === novel.id ? error.message : "";
   const tabs: [Tab, string][] = [["plan", "기획"], ["outline", `개요 ${novel.outline.length}`], ["manuscript", `원고 ${novel.episodes.length}/${novel.episodeCount}`]];
 
   return (
@@ -68,12 +68,7 @@ export default function NovelView({ onMenu, onOpenLibrary, onOpenSettings }: { o
           <span className="h-2 w-2 animate-pulse rounded-full bg-violet-600" /> {mine.task === "outline" ? "개요 작성 중…" : `${mine.index + 1}화 집필 중…`} (보기)
         </button>
       )}
-      {myError && (
-        <div className="flex items-start gap-2 bg-rose-50 px-4 py-2 text-sm text-rose-800 dark:bg-rose-950/40 dark:text-rose-200">
-          <span className="flex-1 break-words">⚠️ {myError}</span>
-          <button className="text-xs underline" onClick={dismissNovelError}>닫기</button>
-        </div>
-      )}
+      {error?.novelId === novel.id && <NovelErrorBox error={error} busy={!!live} onOutline={() => setTab("outline")} />}
       <div className="flex-1 overflow-y-auto">
         <div className={`content-width mx-auto px-4 py-5 lg:px-8 cw-${width}`}>
           {tab === "plan" && <PlanTab novel={novel} onOpenLibrary={onOpenLibrary} onNext={() => setTab("outline")} />}
@@ -130,17 +125,11 @@ function PlanTab({ novel: n, onOpenLibrary, onNext }: { novel: Novel; onOpenLibr
   );
 }
 
-function OutlineTab({ novel: n, live, busy, onWrite }: { novel: Novel; live: { text: string; status: string; thinking: string; index: number } | null; busy: boolean; onWrite: () => void }) {
+function OutlineTab({ novel: n, live, busy, onWrite }: { novel: Novel; live: NovelLive | null; busy: boolean; onWrite: () => void }) {
   const written = n.episodes.length;
   const setItem = (i: number, p: { title?: string; summary?: string }) => updateNovel(n.id, { outline: n.outline.map((o, k) => (k === i ? { ...o, ...p } : o)) });
   const canMake = !!(n.brief.trim() || n.worldId || n.characterIds.length);
-  if (live)
-    return (
-      <div className="space-y-3">
-        <LiveHeader label={live.index ? `${live.index + 1}화부터 개요 작성 중` : "개요 작성 중"} live={live} />
-        <pre className="whitespace-pre-wrap font-sans text-sm text-stone-600 dark:text-stone-300">{live.text}</pre>
-      </div>
-    );
+  if (live) return <OutlineProgress live={live} />;
   return (
     <div className="space-y-4">
       {n.outline.length === 0 ? (
@@ -175,6 +164,86 @@ function OutlineTab({ novel: n, live, busy, onWrite }: { novel: Novel; live: { t
     </div>
   );
 }
+
+/** 지난 시간 (1초마다 갱신) */
+function useElapsed(since: number) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return Math.max(0, Math.round((now - since) / 1000));
+}
+const secText = (s: number) => (s >= 60 ? `${Math.floor(s / 60)}분 ${s % 60}초` : `${s}초`);
+
+const OUTLINE_STEPS = ["설정 정리 중", "AI에게 요청 보내는 중", "AI가 구상하는 중", "개요 받는 중", "개요 읽는 중", "개요 저장 중"];
+
+/** 개요 만들기 진행 상황: 단계 · 받은 회차 수 · 지난 시간 · 받는 글 */
+function OutlineProgress({ live }: { live: NovelLive }) {
+  const sec = useElapsed(live.startedAt);
+  const total = live.total ?? 0, done = live.done ?? 0;
+  const at = Math.max(0, OUTLINE_STEPS.indexOf(live.stage ?? ""));
+  // 받는 중이면 회차 수로, 그 전에는 단계로 진행률을 어림한다
+  const pct = live.stage === "개요 받는 중" && total ? 15 + Math.round((done / total) * 80) : at >= 4 ? 97 : [3, 8, 12][at] ?? 10;
+  return (
+    <div className="space-y-3">
+      <div className="card space-y-2" role="progressbar" aria-valuenow={pct} aria-label="개요 만들기 진행률">
+        <div className="flex items-center gap-2 text-sm font-semibold text-violet-700 dark:text-violet-300" aria-live="polite">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-violet-600" />
+          <span className="flex-1">{live.index ? `${live.index + 1}화부터 ` : ""}개요 만드는 중 · {live.stage}{live.stage === "개요 받는 중" && total ? ` (${done} / ${total}화)` : ""}</span>
+          <span className="text-xs font-normal text-stone-500">{secText(sec)}</span>
+          <button className="btn-danger border border-rose-300 px-2 py-1 text-xs" onClick={stopNovel}>■ 중단</button>
+        </div>
+        <div className="h-2 overflow-hidden rounded-full bg-stone-200 dark:bg-stone-800">
+          <div className="h-full rounded-full bg-violet-600 transition-all duration-500" style={{ width: `${pct}%` }} />
+        </div>
+        <ol className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+          {OUTLINE_STEPS.map((st, i) => (
+            <li key={st} className={i < at ? "text-emerald-600" : i === at ? "font-semibold text-violet-700 dark:text-violet-300" : "text-stone-400"}>{i < at ? "✓" : i === at ? "▶" : "·"} {st}</li>
+          ))}
+        </ol>
+        {live.status && <p className="text-xs text-amber-700 dark:text-amber-300">ℹ️ {live.status}</p>}
+        {!live.text && sec >= 30 && <p className="hint">설정이 많은 봇은 AI가 읽고 구상하는 데 시간이 걸립니다. 조금만 기다려 주세요.</p>}
+      </div>
+      {live.thinking && !live.text && <div className="line-clamp-4 text-xs italic text-stone-500">💭 {live.thinking.slice(-400)}</div>}
+      {live.text && <pre className="whitespace-pre-wrap font-sans text-sm text-stone-600 dark:text-stone-300">{live.text}</pre>}
+    </div>
+  );
+}
+
+/** 소설 작업 오류: 무엇을 하다가, 왜, 어떻게 하면 되는지 + AI가 보낸 응답 */
+function NovelErrorBox({ error: e, busy, onOutline }: { error: NovelError; busy: boolean; onOutline: () => void }) {
+  const [open, setOpen] = useState(false);
+  const partial = e.task === "outline" && e.message.includes("만 받았습니다");
+  const facts = [
+    e.stage && `단계: ${e.stage}`,
+    e.model && `모델: ${e.model}`,
+    e.stopReason && `끝난 이유: ${STOP_TEXT[e.stopReason] ?? e.stopReason}`,
+    e.elapsed !== undefined && `걸린 시간: ${secText(Math.round(e.elapsed / 1000))}`,
+    e.raw !== undefined && `받은 응답: ${e.raw.length.toLocaleString()}자`,
+  ].filter(Boolean) as string[];
+  return (
+    <div className={`space-y-1 px-4 py-2 text-sm ${partial ? "bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200" : "bg-rose-50 text-rose-800 dark:bg-rose-950/40 dark:text-rose-200"}`} role="alert">
+      <div className="flex items-start gap-2">
+        <span className="flex-1 break-words font-semibold">⚠️ {e.task === "outline" ? "개요 만들기" : e.task === "episode" ? "원고 쓰기" : "작업"}{partial ? "" : " 실패"}: {e.message}</span>
+        <button className="text-xs underline" onClick={dismissNovelError}>닫기</button>
+      </div>
+      {e.hint && <p className="text-xs">💡 {e.hint}</p>}
+      {facts.length > 0 && <p className="text-xs opacity-80">{facts.join(" · ")}</p>}
+      <div className="flex flex-wrap gap-2 text-xs">
+        {(e.raw || e.thinking) && <button className="underline" onClick={() => setOpen((v) => !v)}>{open ? "AI 응답 접기" : "AI가 보낸 응답 보기"}</button>}
+        {e.task === "outline" && !partial && <button className="underline" disabled={busy} onClick={() => { onOutline(); void generateOutline(e.novelId, e.index ?? 0); }}>↻ 다시 시도</button>}
+      </div>
+      {open && (
+        <div className="space-y-2">
+          {e.thinking && <details><summary className="cursor-pointer text-xs">💭 AI의 생각 ({e.thinking.length.toLocaleString()}자)</summary><pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-white/70 p-2 text-xs text-stone-700 dark:bg-black/30 dark:text-stone-300">{e.thinking}</pre></details>}
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded bg-white/70 p-2 text-xs text-stone-700 dark:bg-black/30 dark:text-stone-300">{e.raw || "(본문 없음)"}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+const STOP_TEXT: Record<string, string> = { max_tokens: "길이 한도", length: "길이 한도", MAX_TOKENS: "길이 한도", end_turn: "정상 종료", stop: "정상 종료", STOP: "정상 종료", SAFETY: "안전 정책", refusal: "거부" };
 
 function LiveHeader({ label, live }: { label: string; live: { text: string; status: string; thinking: string } }) {
   return (

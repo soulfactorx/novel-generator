@@ -44,7 +44,7 @@ export interface AppState {
   novels: Record<string, Novel>;
   activeNovelId: string | null;
   novelLive: NovelLive | null;
-  novelError: { novelId: string; message: string } | null;
+  novelError: NovelError | null;
   usage: UsageData;
   sync: SyncStatus;
   images: Record<string, ImageMeta>; // 이미지 정보 (바이트는 필요할 때 IndexedDB에서)
@@ -81,9 +81,26 @@ interface SyncConfig {
   lastSyncAt?: number;
   device: string;
 }
+/** 소설 작업 오류: 어느 단계에서 무엇 때문에, AI가 실제로 보낸 응답과 함께 */
+export interface NovelError {
+  novelId: string;
+  message: string;
+  task?: "outline" | "episode";
+  index?: number; // 개요: 이 회차(0부터)부터 만들던 중 · 원고: 이 회차
+  stage?: string; // 오류가 난 단계 ("AI 응답 받는 중" 등)
+  hint?: string; // 해결 방법
+  model?: string;
+  stopReason?: string; // AI가 응답을 끝낸 이유
+  elapsed?: number; // 걸린 시간 (ms)
+  raw?: string; // AI가 보낸 응답 그대로
+  thinking?: string;
+}
 export interface NovelLive {
   novelId: string;
   task: "outline" | "episode";
+  stage?: string; // 지금 하는 일
+  total?: number; // 개요: 만들 회차 수
+  done?: number; // 개요: 지금까지 받은 회차 수
   index: number; // 쓰는 중인 회차 (0부터)
   until?: number; // 연속 집필 목표 (이 회차까지)
   text: string;
@@ -1123,32 +1140,84 @@ if (typeof document !== "undefined")
 export const stopNovel = () => novelController?.abort();
 const novelLiveSet = (p: Partial<NovelLive>) => setState((st) => (st.novelLive ? { novelLive: { ...st.novelLive, ...p } } : {}));
 
+/** AI 호출 오류 종류별 해결 방법 */
+const PROVIDER_HINT: Record<ProviderError["kind"], string> = {
+  auth: "API 키가 없거나 맞지 않습니다. [설정 → AI]에서 키를 확인해 주세요.",
+  refusal: "AI가 내용을 거부했습니다. [설정 → 수위]나 시놉시스·설정의 표현을 바꿔 보세요.",
+  rate: "요청이 너무 많거나 사용 한도에 걸렸습니다. 잠시 뒤 다시 시도해 주세요.",
+  server: "AI 서버 오류입니다. 잠시 뒤 다시 시도하거나 다른 모델을 써 보세요.",
+  request: "요청이 받아들여지지 않았습니다. 모델 이름과 설정을 확인해 주세요.",
+  network: "인터넷 연결이 끊겼거나 응답이 너무 오래 걸렸습니다. 다시 시도해 주세요.",
+};
+export const hintForError = (e: unknown): string | undefined => (e as { hint?: string })?.hint ?? (e instanceof ProviderError ? PROVIDER_HINT[e.kind] : undefined);
+
+/** AI가 응답을 길이 한도 때문에 끊었는지 */
+const isCut = (r?: string) => r === "max_tokens" || r === "length" || r === "MAX_TOKENS";
+
 /** 개요 생성. from: 이 회차(0부터)부터 다시 짠다 (앞부분 유지) */
 export async function generateOutline(novelId: string, from = 0): Promise<boolean> {
   const n = state.novels[novelId];
   if (!n || state.novelLive) return false;
   from = Math.max(0, Math.min(from, n.outline.length, n.episodeCount - 1));
+  const total = n.episodeCount - from;
+  const startedAt = Date.now();
   novelController = new AbortController();
-  setState({ novelLive: { novelId, task: "outline", index: from, text: "", thinking: "", status: "", startedAt: Date.now() }, novelError: null });
-  let streamed = "";
+  setState({ novelLive: { novelId, task: "outline", index: from, text: "", thinking: "", status: "", stage: "설정 정리 중", total, done: 0, startedAt }, novelError: null });
+  let streamed = "", thought = "", stage = "설정 정리 중";
+  const step = (st: string) => novelLiveSet({ stage: (stage = st) });
+  let res: AIResult | undefined;
   try {
     const s = state.settings;
-    const res = await callAI("outline", {
-      ...buildOutlineRequest(s, n, contextFor(n), from),
-      maxTokens: Math.min(T("novel.outlineTokens"), 1500 + (n.episodeCount - from) * 250),
+    const ctx0 = contextFor(n);
+    // 봇 설정 글의 CBS({{#when}} 토글 등)를 원고 집필과 같게 정리
+    const ctx = s.risu.cbs ? processContext(ctx0, buildEnv({ ctx: ctx0, globals: state.globals, images: Object.values(state.images), rmVar: true, seed: n.id })) : ctx0;
+    const req = buildOutlineRequest(s, n, ctx, from);
+    step("AI에게 요청 보내는 중");
+    res = await callAI("outline", {
+      ...req,
+      maxTokens: Math.min(T("novel.outlineTokens"), 1500 + total * 400),
       signal: novelController.signal,
-      onText: (d) => novelLiveSet({ text: (streamed += d) }),
-      onThinking: (d) => novelLiveSet({ thinking: (state.novelLive?.thinking ?? "") + d }),
+      onText: (d) => {
+        streamed += d;
+        const done = parseOutline(streamed).filter((x) => x.number > from).length;
+        novelLiveSet({ text: streamed, stage: (stage = "개요 받는 중"), done: Math.min(done, total) });
+      },
+      onThinking: (d) => novelLiveSet({ thinking: (thought += d), stage: (stage = "AI가 구상하는 중") }),
       onStatus: (m) => novelLiveSet({ status: m }),
-    }, { onRestart: () => ((streamed = ""), novelLiveSet({ text: "", thinking: "" })) });
-    const items = parseOutline(res.text).filter((x) => x.number > from);
-    if (!items.length) throw new Error("개요 형식을 읽지 못했습니다. 다시 시도해 주세요.");
+    }, { onRestart: () => ((streamed = ""), (thought = ""), novelLiveSet({ text: "", thinking: "", done: 0 })) });
+    step("개요 읽는 중");
+    const text = res.text;
+    const items = parseOutline(text).filter((x) => x.number > from);
+    const cut = isCut(res.stopReason);
+    if (!items.length) {
+      const why = !text.trim()
+        ? { message: "AI가 빈 응답을 보냈습니다.", hint: cut ? "생각(사고)에 출력 한도를 다 써서 본문이 없었습니다. [설정 → 세부 수치]에서 '개요 응답 최대 길이'를 늘리거나 사고를 덜 하는 모델로 바꿔 보세요." : "안전 정책·일시적 오류일 수 있습니다. 다시 시도하거나 모델을 바꿔 보세요." }
+        : { message: "AI 응답에서 회차 개요를 찾지 못했습니다.", hint: "AI가 \"[1화] 제목\" 형식 대신 다른 글(봇 설정의 상태창·질문·이야기 본문 등)을 썼습니다. 아래 응답을 확인하고 다시 시도해 보세요. [기획]에 시놉시스를 적어 주면 더 잘 따릅니다." };
+      throw Object.assign(new Error(why.message), { hint: why.hint });
+    }
+    step("개요 저장 중");
     const cur = state.novels[novelId] ?? n;
     const outline = [...cur.outline.slice(0, from), ...items.slice(0, cur.episodeCount - from).map((x) => ({ id: uid("o"), title: x.title, summary: x.summary }))];
     updateNovel(novelId, { outline });
+    // 응답이 잘려 일부 회차만 왔으면 받은 만큼 저장하고 알린다
+    if (items.length < total)
+      setState({
+        novelError: {
+          novelId, task: "outline", index: from, stage: "개요 읽는 중", model: res.model, stopReason: res.stopReason, elapsed: Date.now() - startedAt, raw: text, thinking: thought || res.thinking,
+          message: `개요를 ${total}개 중 ${items.length}개만 받았습니다${cut ? " (응답 길이 한도에서 잘림)" : ""}. 받은 것만 저장했습니다.`,
+          hint: `[✨ ${from + items.length + 1}~${n.episodeCount}화 개요 이어 만들기]로 나머지를 만들 수 있습니다.`,
+        },
+      });
     return true;
   } catch (e) {
-    if ((e as Error)?.name !== "AbortError") setState({ novelError: { novelId, message: (e as Error)?.message || String(e) } });
+    const err = e as Error & { hint?: string };
+    if (err?.name !== "AbortError")
+      setState({
+        novelError: {
+          novelId, task: "outline", index: from, stage, message: err?.message || String(e), hint: hintForError(err), model: res?.model, stopReason: res?.stopReason,
+          elapsed: Date.now() - startedAt, raw: res?.text ?? streamed, thinking: thought || res?.thinking,
+        },
+      });
     return false;
   } finally {
     novelController = null;
@@ -1163,9 +1232,10 @@ export async function writeEpisode(novelId: string, index: number, note = "", un
   if (!n.outline[index]) return setNovelError(novelId, `${index + 1}화의 개요가 없습니다. 먼저 개요를 만들어 주세요.`);
   if (index > n.episodes.length) return setNovelError(novelId, `${n.episodes.length + 1}화부터 순서대로 써 주세요.`);
   novelController = new AbortController();
-  setState({ novelLive: { novelId, task: "episode", index, until, text: "", thinking: "", status: "", startedAt: Date.now() }, novelError: null });
+  const startedAt = Date.now();
+  setState({ novelLive: { novelId, task: "episode", index, until, text: "", thinking: "", status: "", startedAt }, novelError: null });
   void holdWake();
-  let streamed = "";
+  let streamed = "", thoughtLen = 0;
   const pool = poolFor(n);
   const save = (raw: string, model: string, incomplete: boolean, usage?: MessageUsage) => {
     const { text: body, summary } = splitEpisode(raw);
@@ -1192,7 +1262,7 @@ export async function writeEpisode(novelId: string, index: number, note = "", un
       maxTokens: episodeLength(n.episodeLength).tokens,
       signal: novelController.signal,
       onText: (d) => novelLiveSet({ text: previewEpisode((streamed += d)) }),
-      onThinking: (d) => novelLiveSet({ thinking: (state.novelLive?.thinking ?? "") + d }),
+      onThinking: (d) => ((thoughtLen += d.length), novelLiveSet({ thinking: (state.novelLive?.thinking ?? "") + d })),
       onStatus: (m) => novelLiveSet({ status: m }),
     }, { onRestart: () => ((streamed = ""), novelLiveSet({ text: "", thinking: "" })) });
     const cut = res.stopReason === "max_tokens" || res.stopReason === "length" || res.stopReason === "MAX_TOKENS";
@@ -1203,7 +1273,13 @@ export async function writeEpisode(novelId: string, index: number, note = "", un
     const err = e as Error;
     // 중단해도 충분히 쓴 원고는 '미완성'으로 보존
     if (splitEpisode(streamed).text.length >= 500) save(streamed, "", true);
-    if (err?.name !== "AbortError") setNovelError(novelId, err?.message || String(e));
+    if (err?.name !== "AbortError")
+      setState({
+        novelError: {
+          novelId, task: "episode", index, stage: streamed ? `${index + 1}화 원고 받는 중` : thoughtLen ? "AI가 구상하는 중" : "AI에게 요청 보내는 중",
+          message: err?.message || String(e), hint: hintForError(err), elapsed: Date.now() - startedAt, raw: streamed,
+        },
+      });
     return false;
   } finally {
     novelController = null;

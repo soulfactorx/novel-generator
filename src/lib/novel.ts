@@ -35,18 +35,95 @@ export function buildOutlineRequest(s: Settings, n: Novel, ctx: StoryContext, fr
 
 export const formatOutline = (items: OutlineItem[], offset = 0) => items.map((o, i) => `[${i + 1 + offset}화] ${o.title}\n${o.summary}`).join("\n\n");
 
-/** "[1화] 제목\n요약…" 형식 파싱. "제 1화:", "## 1화 - 제목", "1화. 제목" 등 변형도 허용 */
-export function parseOutline(text: string): { number: number; title: string; summary: string }[] {
-  const re = /^[ \t]*(?:#+[ \t]*)?(?:\*\*)?\[?[ \t]*(?:제[ \t]*)?(\d{1,3})[ \t]*화[ \t]*\]?(?:\*\*)?[ \t]*[:.\-–—)]?[ \t]*(.*)$/gm;
+type OutlineHead = { number: number; title: string; summary: string };
+
+/** 제목·요약 다듬기: 굵게·따옴표·'요약:' 머리 제거, 제목이 비면 다음 줄을 제목으로 */
+function outlineItem(num: number, rawTitle: string, rawBody: string): OutlineHead {
+  const body = rawBody.replace(/^\s*(?:요약|내용|줄거리|summary)\s*[:：]\s*/im, "").replace(/\*\*/g, "").trim();
+  let title = rawTitle.replace(/\*\*/g, "").replace(/^\s*(?:제목\s*[:：]\s*)?/, "").replace(/^["'「『“]|["'」』”]$/g, "").trim();
+  let summary = body;
+  if (!title && body) [title, summary] = [body.split("\n")[0].trim(), body.split("\n").slice(1).join("\n").trim()];
+  return { number: num, title: title || `${num}화`, summary };
+}
+
+/** 머리 줄(정규식, 1번 그룹=번호, 2번 그룹=제목)로 나눠 읽기 */
+function splitByHeads(text: string, re: RegExp): OutlineHead[] {
   const heads = [...text.matchAll(re)];
   return heads.map((m, i) => {
     const end = i + 1 < heads.length ? heads[i + 1].index! : text.length;
-    const body = text.slice(m.index! + m[0].length, end).replace(/^\s*(?:요약|내용)\s*[:：]\s*/m, "").replace(/\*\*/g, "").trim();
-    let title = m[2].replace(/\*\*/g, "").replace(/^["'「『]|["'」』]$/g, "").trim();
-    let summary = body;
-    if (!title && body) [title, summary] = [body.split("\n")[0].trim(), body.split("\n").slice(1).join("\n").trim()];
-    return { number: Number(m[1]), title: title || `${m[1]}화`, summary };
+    return outlineItem(Number(m[1]), m[2] ?? "", text.slice(m.index! + m[0].length, end));
   });
+}
+
+const HEAD = String.raw`^[ \t]*(?:[-*•][ \t]*)?(?:#+[ \t]*)?(?:\*\*)?[\[【(]?[ \t]*`;
+const TAIL = String.raw`[ \t]*[\]】)]?(?:\*\*)?[ \t]*[:：.\-–—)]?[ \t]*(.*)$`;
+/** 머리 줄 형식: 우선순위 순서. 앞의 형식으로 하나도 못 찾을 때만 다음 형식을 쓴다 */
+const OUTLINE_HEADS = [
+  new RegExp(String.raw`${HEAD}(?:제[ \t]*)?(\d{1,3})[ \t]*화${TAIL}`, "gm"), // [1화] · 제 1화: · ## 1화 - 제목
+  new RegExp(String.raw`${HEAD}(?:episode|ep\.?|chapter|ch\.?|part)[ \t]*(\d{1,3})${TAIL}`, "gim"), // Episode 1 · EP.1 · Chapter 1
+  new RegExp(String.raw`${HEAD}(?:제[ \t]*)?(\d{1,3})[ \t]*(?:회|장|편|막)${TAIL}`, "gm"), // 1회 · 제1장
+];
+
+/** 표: | 1 | 제목 | 요약 | */
+function parseTable(text: string): OutlineHead[] {
+  const out: OutlineHead[] = [];
+  for (const line of text.split("\n")) {
+    const cells = line.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+    const m = cells.length >= 3 && /^(?:제\s*)?(\d{1,3})\s*(?:화|회|장)?$/.exec(cells[0].replace(/\*\*/g, ""));
+    if (m) out.push(outlineItem(Number(m[1]), cells[1], cells.slice(2).join(" ")));
+  }
+  return out;
+}
+
+/** JSON: [{ "title": …, "summary": … }] 또는 { "episodes": [...] } */
+function parseJsonOutline(text: string): OutlineHead[] {
+  const m = /[[{][\s\S]*[\]}]/.exec(text);
+  if (!m) return [];
+  try {
+    let j: unknown = JSON.parse(m[0]);
+    if (j && !Array.isArray(j) && typeof j === "object") j = Object.values(j).find(Array.isArray);
+    if (!Array.isArray(j)) return [];
+    return j.flatMap((x, i) => {
+      if (!x || typeof x !== "object") return [];
+      const o = x as Record<string, unknown>;
+      const num = Number(o.number ?? o.episode ?? o.no ?? i + 1) || i + 1;
+      const title = String(o.title ?? o.제목 ?? "");
+      const summary = String(o.summary ?? o.요약 ?? o.content ?? o.내용 ?? "");
+      return title || summary ? [outlineItem(num, title, summary)] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+/** 번호 목록: "1. 제목 — 요약" (1부터 차례로 이어지는 줄만) */
+function parseNumbered(text: string): OutlineHead[] {
+  const heads = splitByHeads(text, /^[ \t]*(?:\*\*)?(\d{1,3})[ \t]*[.)](?:\*\*)?[ \t]+(.*)$/gm);
+  const seq = heads.filter((h, i) => h.number === i + 1);
+  if (seq.length < 2 || seq.length !== heads.length) return [];
+  return seq.map((h) => {
+    if (h.summary) return h;
+    const [t, ...rest] = h.title.split(/\s+[—–-]\s+|[:：]\s+/);
+    return rest.length ? { ...h, title: t.trim(), summary: rest.join(" ").trim() } : h;
+  });
+}
+
+/**
+ * AI가 보낸 개요 읽기. 기본 형식은 "[1화] 제목\n요약…".
+ * "제 1화:", "## 1화 - 제목", "Episode 1", "1회", 표, JSON, "1. 제목" 번호 목록도 읽는다.
+ */
+export function parseOutline(raw: string): OutlineHead[] {
+  // 생각 블록·코드 울타리 제거
+  const text = raw.replace(/<(think|thinking|thought)>[\s\S]*?<\/\1>/gi, "").replace(/^```[a-z]*\s*$/gim, "");
+  for (const re of OUTLINE_HEADS) {
+    const r = splitByHeads(text, re);
+    if (r.length) return r;
+  }
+  for (const f of [parseTable, parseJsonOutline, parseNumbered]) {
+    const r = f(text);
+    if (r.length) return r;
+  }
+  return [];
 }
 
 /* ---------------- 회차 집필 ---------------- */

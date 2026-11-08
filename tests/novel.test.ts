@@ -125,3 +125,30 @@ test("E.No.S fullNovels import", () => {
   expect(n.outline.map((o) => o.title)).toEqual(["하나", "둘", "셋"]);
   expect(n.episodes.map((e) => e.text)).toEqual(["본문1", "본문2"]);
 });
+
+describe("outline parsing: other formats", () => {
+  const pick = (t: string) => parseOutline(t).map((x) => [x.number, x.title, x.summary]);
+  test("Episode N / EP.N / Chapter N", () => {
+    expect(pick("Episode 1: The Night\nA ship.\n\nEP.2 - Guild\nInfiltrate.")).toEqual([[1, "The Night", "A ship."], [2, "Guild", "Infiltrate."]]);
+    expect(pick("**Chapter 1** Rain\nwet")).toEqual([[1, "Rain", "wet"]]);
+  });
+  test("N회 · 제N장 · bullet · 【1화】", () => {
+    expect(pick("- 1회. 시작\n내용 하나\n- 2회. 끝\n내용 둘")).toEqual([[1, "시작", "내용 하나"], [2, "끝", "내용 둘"]]);
+    expect(pick("【1화】 첫날\n출근")).toEqual([[1, "첫날", "출근"]]);
+  });
+  test("markdown table", () => {
+    expect(pick("| 회차 | 제목 | 요약 |\n|---|---|---|\n| 1화 | 첫날 | 출근한다 |\n| 2 | **둘째 날** | 일한다 |")).toEqual([[1, "첫날", "출근한다"], [2, "둘째 날", "일한다"]]);
+  });
+  test("JSON", () => {
+    expect(pick('```json\n[{"title":"첫날","summary":"출근"},{"title":"둘째","summary":"일"}]\n```')).toEqual([[1, "첫날", "출근"], [2, "둘째", "일"]]);
+    expect(pick('{"episodes":[{"number":1,"제목":"가","요약":"나"}]}')).toEqual([[1, "가", "나"]]);
+  });
+  test("numbered list, only when sequential", () => {
+    expect(pick("1. 첫날 — 출근한다\n2. 둘째 날: 일한다")).toEqual([[1, "첫날", "출근한다"], [2, "둘째 날", "일한다"]]);
+    expect(pick("인물\n1. 하루\n3. 등대")).toEqual([]);
+  });
+  test("thinking blocks are ignored; nothing found → empty", () => {
+    expect(pick("<thinking>[9화] 아님</thinking>\n[1화] 진짜\n요약")).toEqual([[1, "진짜", "요약"]]);
+    expect(pick("어떤 이야기를 원하시나요?")).toEqual([]);
+  });
+});
