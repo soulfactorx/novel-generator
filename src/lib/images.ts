@@ -146,6 +146,13 @@ export function runScripts(text: string, scripts: RegexScript[], mode: ScriptMod
       continue; // 이 브라우저에서 못 쓰는 정규식은 건너뜀
     }
     try {
+      if (s.stripUi) {
+        // 소설: 채팅 UI는 그리지 않는다. 일치 부분이 글 전체에 가까우면(본문 전체를 감싸는 스크립트) 그대로 두고, 아니면(상태창 블록 등) 지운다
+        if (/\$(0|&)/.test(s.out)) continue;
+        const whole = data.length;
+        data = data.replace(re, (m: string) => (m.length >= whole * 0.9 ? m : ""));
+        continue;
+      }
       if (out.startsWith("@@") || actions.length) {
         if (!re.test(data)) continue;
         re.lastIndex = 0;
@@ -166,6 +173,22 @@ export function runScripts(text: string, scripts: RegexScript[], mode: ScriptMod
     }
   }
   return { text: data, emotion };
+}
+
+/**
+ * 채팅 화면 전용 UI를 그리는 스크립트인지: 버튼·폼 같은 조작 요소가 있거나,
+ * 채팅 변수·대화 번호를 읽는데 그림은 내놓지 않는 것 (상태창·폰 화면 등). 소설에는 변수가 없어 빈 껍데기만 남는다
+ */
+export function isChatUiScript(s: RegexScript): boolean {
+  const out = s.out || "";
+  if (/risu-(?:btn|trigger|form)|<button\b|<input\b|<select\b|onclick\s*=/i.test(out)) return true;
+  const readsChat = /\{\{\s*(?:getvar|gettempvar|getglobalvar|chat_?index|lastmessageid|lastmessage|previous_chat_log|button)\b/i.test(out);
+  const drawsImage = /<img\b|<video\b|\{\{\s*(?:raw|path|img|image|asset|emotion|video|video-img|source)::/i.test(out);
+  return readsChat && !drawsImage;
+}
+/** 소설용 그림·스크립트 묶음: 채팅 UI 스크립트는 그리지 않고 해당 부분을 지운다 */
+export function novelPool(pool: ImagePool): ImagePool {
+  return pool.scripts.some(isChatUiScript) ? { ...pool, scripts: pool.scripts.map((s) => (isChatUiScript(s) ? { ...s, stripUi: true } : s)) } : pool;
 }
 
 /* ---------------- 에셋 표시 → 그림 ---------------- */

@@ -162,6 +162,7 @@ export interface RegexScript {
   flag?: string;
   ableFlag?: boolean;
   disabled?: boolean; // 이 앱에서 끈 스크립트 (지우지 않고 보관)
+  stripUi?: boolean; // 소설용: 채팅 화면 UI를 그리는 스크립트 → 그리지 않고 해당 부분을 지움 (저장하지 않음, novelPool이 붙임)
 }
 /** RisuAI 봇의 실행 요소 (토글·기본 변수·트리거·Lua·배경 HTML) — 원본 그대로 보관 */
 export interface RisuExtras {

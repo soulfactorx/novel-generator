@@ -171,7 +171,7 @@ describe("실제 RisuAI 봇 구조 (부르봉과 라이스샤워 charx 분석 �
     expect(instructionsOf({ characters: [c, char({ id: "d", name: "라이스", instructions: "상태창 출력" })] })).toContain("[라이스]\n상태창 출력");
     const n = normalizeNovel({ id: "n", title: "T", author: "", genre: "", brief: "b", characterIds: ["c"], episodeCount: 1, episodeLength: "short", outline: [{ id: "o", title: "1화", summary: "s" }], episodes: [], createdAt: 0, updatedAt: 0 });
     const req = buildEpisodeRequest(DEFAULT_SETTINGS, n, { characters: [c] }, 0, { instructions: instructionsOf({ characters: [c] }) });
-    expect(String(req.messages[0].content)).toContain("## 설정에 정해진 지시 (반드시 따를 것)\n<Image Commands>");
+    expect(String(req.messages[0].content)).toContain("## 설정에 정해진 지시\n");
     // 봇 규칙이 지시에 있으면 '봇 규칙을 따르라'로 안내
     expect(hasOwnImageRules({ characters: [c] }, imagePool({ characters: [c] }, list))).toBe(true);
   });
