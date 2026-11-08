@@ -11,6 +11,7 @@ import CastPicker from "./CastPicker";
 import { RoomModules } from "./ModulePicker";
 import CoverPanel from "./CoverPanel";
 import RisuText from "./RisuText";
+import { useFollowScroll } from "./useFollowScroll";
 import { htmlToBlocks, imagePool, novelPool, renderRisu, type ImagePool } from "../lib/images";
 
 type Tab = "plan" | "outline" | "manuscript";
@@ -262,7 +263,11 @@ function ManuscriptTab({ novel: n, live, busy, onRead, onOutline, onOpenSettings
   const total = n.episodes.reduce((a, e) => a + charCount(e.text), 0);
   const hasKey = settings.provider === "openai" ? !!settings.keys.openai || /localhost|127\.0\.0\.1/.test(settings.openaiBaseUrl) : !!settings.keys[settings.provider];
   const lastIdx = Math.min(n.outline.length, n.episodeCount) - 1;
-  useEffect(() => { if (live?.text) endRef.current?.scrollIntoView?.({ block: "end" }); }, [live?.text]);
+  // 집필 중 끝을 따라가되, 위로 스크롤하면 멈춘다 (다시 바닥으로 내리거나 버튼을 누르면 따라감)
+  const scroll = useFollowScroll(endRef);
+  const { follow, jump } = scroll;
+  useEffect(() => { if (live) jump(); }, [live?.index, !!live, jump]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (live?.text) follow(); }, [live?.text, follow]);
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -287,6 +292,11 @@ function ManuscriptTab({ novel: n, live, busy, onRead, onOutline, onOpenSettings
           <LiveHeader label={`${live.index + 1}화 「${n.outline[live.index]?.title ?? ""}」 집필 중${live.until !== undefined && live.until > live.index ? ` (${live.until + 1}화까지 연속)` : ""}`} live={live} />
           {live.text ? <RisuText text={live.text} pool={novelPoolFor(n)} cbs={novelCbs(n)} /> : live.thinking && <div className="line-clamp-4 text-xs italic text-stone-500">{live.thinking.slice(-400)}</div>}
           <div ref={endRef} />
+          {scroll.away && (
+            <div className="sticky bottom-3 flex justify-center">
+              <button className="rounded-full bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-lg" onClick={scroll.jump}>↓ 쓰고 있는 곳으로</button>
+            </div>
+          )}
         </div>
       ) : (
         next <= lastIdx && (

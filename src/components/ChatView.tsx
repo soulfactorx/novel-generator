@@ -6,6 +6,7 @@ import DiagnosisDialog from "./DiagnosisDialog";
 import Dialog from "./Dialog";
 import { PROVIDER_LABEL } from "../lib/providers/catalog";
 import MessageView from "./Message";
+import { useFollowScroll } from "./useFollowScroll";
 import RisuText from "./RisuText";
 import { imagePool } from "../lib/images";
 import { ownersOf } from "../lib/prompt";
@@ -43,10 +44,16 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
   const myLive = live && room && live.roomId === room.id ? live : null;
   const hasKey = settings.provider === "openai" ? !!settings.keys.openai || /localhost|127\.0\.0\.1/.test(settings.openaiBaseUrl) : !!settings.keys[settings.provider];
 
+  // AI가 쓰는 동안 끝을 따라가되, 위로 스크롤하면 멈춘다 (다시 바닥으로 내리면 따라감)
+  const scroll = useFollowScroll(endRef);
+  const { follow, jump } = scroll;
+  const lastRole = room?.messages.at(-1)?.role;
+  useEffect(() => jump(), [room?.id, jump]); // 다른 이야기를 열면 맨 아래로
   useEffect(() => {
-    // 최신 Chromium의 scrollIntoView는 Promise를 돌려준다 — effect 정리 함수로 넘어가면 React가 멈추므로 값을 버린다
-    void endRef.current?.scrollIntoView?.({ block: "end" });
-  }, [room?.messages.length, myLive?.text]);
+    if (lastRole === "user") jump(); // 내가 보낸 직후에는 따라가기 다시 시작
+    else follow();
+  }, [room?.messages.length, lastRole, jump, follow]);
+  useEffect(() => follow(), [myLive?.text, myLive?.thinking, follow]);
   useEffect(() => () => stopBgm(), [room?.id]); // 다른 이야기로 가면 배경 음악 멈춤
 
   if (!room)
@@ -193,6 +200,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
           <div ref={endRef} />
         </div>
       </div>
+      {scroll.away && <button className="absolute bottom-3 right-4 z-20 rounded-full bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-lg" onClick={scroll.jump}>↓ 최신 글로{myLive ? " (작성 중)" : ""}</button>}
       </div>
       <EmotionPanel messages={room.messages} pool={pool} cbsFor={(id) => displayCbs(room, id)} />
       </div>
