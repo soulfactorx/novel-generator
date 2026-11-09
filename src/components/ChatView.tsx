@@ -230,7 +230,7 @@ export default function ChatView({ onMenu, onOpenSettings, onOpenLibrary, onNewS
       {diagnosis && (
         <DiagnosisDialog
           title="🩺 이야기 진단"
-          run={(onText) => diagnoseRoom(room.id, onText)}
+          run={(on) => diagnoseRoom(room.id, on)}
           last={room.lastDiagnosis}
           applyLabel="진단 반영해 마지막 응답 다시 생성"
           canApply={last?.role === "assistant" && !last.error && !busy}

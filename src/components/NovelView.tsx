@@ -356,7 +356,7 @@ function Reader({ novel: n, index, busy, onIndex, onClose }: { novel: Novel; ind
       ) : (
         <div style={{ fontSize }}><RisuText text={e.text} pool={pool} cbs={novelCbs(n)} /></div>
       )}
-      {diag && <DiagnosisDialog title={`🩺 ${index + 1}화 진단`} run={(onText) => diagnoseEpisode(n.id, index, onText)} applyLabel="진단 반영해 다시 쓰기" canApply={!busy} onApply={(d) => setRewrite(d)} onClose={() => setDiag(false)} />}
+      {diag && <DiagnosisDialog title={`🩺 ${index + 1}화 진단`} run={(on) => diagnoseEpisode(n.id, index, on)} applyLabel="진단 반영해 다시 쓰기" canApply={!busy} onApply={(d) => setRewrite(d)} onClose={() => setDiag(false)} />}
       {e.summary && !editing && <details className="hint"><summary className="cursor-pointer">이 회차 요약 (다음 회차 집필에 사용)</summary><textarea className="input mt-2 min-h-20 text-xs" value={e.summary} onChange={(x) => editEpisode(n.id, index, { summary: x.target.value })} aria-label="회차 요약" /></details>}
       {rewrite !== null && (
         <div className="card space-y-2">
