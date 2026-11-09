@@ -1380,11 +1380,29 @@ export interface DiagnosisResult {
 let diagController: AbortController | null = null;
 export const stopDiagnosis = () => diagController?.abort();
 
-async function runDiagnosis(req: { system: string; messages: { role: "user" | "assistant"; content: string }[] }, onText?: (all: string) => void): Promise<DiagnosisResult> {
+/** 진단 진행 알림: 지금까지 받은 진단 글 · AI의 생각 · 상태 안내 */
+export interface DiagEvents {
+  onText?: (all: string) => void;
+  onThinking?: (all: string) => void;
+  onStatus?: (message: string) => void;
+}
+const diagEvents = (on?: DiagEvents | ((all: string) => void)): DiagEvents => (typeof on === "function" ? { onText: on } : on ?? {});
+async function runDiagnosis(req: { system: string; messages: { role: "user" | "assistant"; content: string }[] }, on: DiagEvents = {}): Promise<DiagnosisResult> {
   diagController = new AbortController();
-  let all = "";
+  let all = "", thought = "";
   try {
-    const res = await callAI("diagnose", { ...req, maxTokens: T("diagnose.tokens"), signal: diagController.signal, onText: (d) => onText?.((all += d)) }, { onRestart: () => onText?.((all = "")) });
+    const res = await callAI(
+      "diagnose",
+      {
+        ...req,
+        maxTokens: T("diagnose.tokens"),
+        signal: diagController.signal,
+        onText: (d) => on.onText?.((all += d)),
+        onThinking: (d) => on.onThinking?.((thought += d)),
+        onStatus: (m) => on.onStatus?.(m),
+      },
+      { onRestart: () => (on.onText?.((all = "")), on.onThinking?.((thought = ""))) },
+    );
     const r = splitDiagnosis(res.text);
     if (!r.report) throw new Error("빈 진단이 돌아왔습니다.");
     return r;
@@ -1392,17 +1410,17 @@ async function runDiagnosis(req: { system: string; messages: { role: "user" | "a
     diagController = null;
   }
 }
-export async function diagnoseRoom(roomId: string, onText?: (all: string) => void): Promise<DiagnosisResult> {
+export async function diagnoseRoom(roomId: string, on?: DiagEvents | ((all: string) => void)): Promise<DiagnosisResult> {
   const room = state.rooms[roomId];
   if (!room) throw new Error("이야기를 찾을 수 없습니다.");
-  const r = await runDiagnosis(buildRoomDiagnosis(state.settings, room, contextFor(room)), onText);
+  const r = await runDiagnosis(buildRoomDiagnosis(state.settings, room, contextFor(room)), diagEvents(on));
   updateRoom(roomId, { lastDiagnosis: { at: Date.now(), ...r } });
   return r;
 }
-export async function diagnoseEpisode(novelId: string, index: number, onText?: (all: string) => void): Promise<DiagnosisResult> {
+export async function diagnoseEpisode(novelId: string, index: number, on?: DiagEvents | ((all: string) => void)): Promise<DiagnosisResult> {
   const n = state.novels[novelId];
   if (!n?.episodes[index]) throw new Error("회차를 찾을 수 없습니다.");
-  return runDiagnosis(buildEpisodeDiagnosis(state.settings, n, contextFor(n), index), onText);
+  return runDiagnosis(buildEpisodeDiagnosis(state.settings, n, contextFor(n), index), diagEvents(on));
 }
 
 /* ---------------- 책갈피 · 분기 · 되돌리기 ---------------- */
