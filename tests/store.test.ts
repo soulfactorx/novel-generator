@@ -358,6 +358,31 @@ describe("RisuAI 패키지 보관·재사용", () => {
     const s2 = await freshStore();
     expect((s2.getState().library[c1.id] as any).greetings).toEqual(["새 인사"]);
   });
+  test("이미지만 올리기: 라이브러리 내용은 그대로, 이미지만 채움 (같은 이름은 덮어씀)", async () => {
+    const s = await freshStore();
+    const { parseRisuJson, withSource } = await import("../src/lib/risu");
+    await s.importRisu(withSource(parseRisuJson(card("v1 설정", ["인사 A"]))!, "haru.json"), {});
+    const c1 = Object.values(s.getState().library).find((e) => e.name === "하루")! as any;
+    const mine = () => Object.values(s.getState().images).filter((m) => m.ownerId === c1.id);
+    // 동기화로 내용만 넘어온 기기처럼: 이미지는 없고 내용은 직접 고친 상태
+    await s.deleteImages(mine().map((m) => m.id));
+    s.upsertLibrary([{ ...c1, profile: "내가 고친 설정" }]);
+    await s.addImages([{ ownerId: c1.id, name: "내그림", kind: "asset", load: () => PNG }]);
+    const again = withSource(parseRisuJson(card("v2 설정", ["새 인사"]))!, "haru.json");
+    const incoming = s.existingPackages(again)[0].incoming;
+    const res = await s.importRisu(again, { modes: { [incoming]: "images" } });
+    expect(res).toMatchObject({ replaced: 0, imagesOnly: 1, images: 1 });
+    const chars = Object.values(s.getState().library).filter((e) => e.name === "하루") as any[];
+    expect(chars).toHaveLength(1);
+    expect(chars[0].profile).toBe("내가 고친 설정");
+    expect(chars[0].greetings).toEqual(["인사 A"]);
+    expect(mine().map((m) => m.name).sort()).toEqual(["harbor", "내그림"]);
+    // 한 번 더 올려도 같은 이름은 덮어써서 늘지 않는다
+    const third = withSource(parseRisuJson(card("v3", ["x"]))!, "haru.json");
+    await s.importRisu(third, { replace: true, modes: { [s.existingPackages(third)[0].incoming]: "images" } });
+    expect(mine().map((m) => m.name).sort()).toEqual(["harbor", "내그림"]);
+    expect((s.getState().library[c1.id] as any).profile).toBe("내가 고친 설정");
+  });
 });
 
 test("입력 없이 보내기: 마지막이 AI 응답이면 이어 쓰기 요청을 붙여 다음 턴 진행 (기록에는 남지 않음)", async () => {
