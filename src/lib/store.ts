@@ -401,25 +401,44 @@ export function existingPackages(data: Pick<RisuImport, "library">): { incoming:
   return out;
 }
 
+/** 이미 가져온 같은 패키지를 다시 가져올 때 항목마다 고르는 방식 */
+export type ImportMode = "replace" | "images" | "add";
+
 /**
- * RisuAI 패키지 가져오기. replace: 이미 가져온 같은 패키지를 새 내용으로 교체
- * (id는 그대로 두어 그 패키지를 쓰던 이야기·소설의 연결이 유지됨, 이미지는 새 것으로 바꿈)
+ * RisuAI 패키지 가져오기. 이미 가져온 같은 패키지가 있을 때:
+ * - replace(교체): 새 내용으로 덮어씀 (id는 그대로 두어 그 패키지를 쓰던 이야기·소설의 연결이 유지됨, 이미지는 새 것으로 바꿈)
+ * - images(이미지만): 라이브러리 내용은 그대로 두고 이미지만 올림 (같은 이름은 덮어쓰고 나머지는 그대로)
+ * - add(따로 추가): 새 항목으로 하나 더 만듦
+ * replace: true는 전부 교체. modes로 항목(가져오는 쪽 id)마다 따로 정할 수 있다
  */
-export async function importRisu(data: RisuImport, opts: { greeting?: number; replace?: boolean; onProgress?: (done: number, total: number) => void } = {}): Promise<{ room: string | null; images: number; replaced: number }> {
+export async function importRisu(data: RisuImport, opts: { greeting?: number; replace?: boolean; modes?: Record<string, ImportMode>; onProgress?: (done: number, total: number) => void } = {}): Promise<{ room: string | null; images: number; replaced: number; imagesOnly: number }> {
   const idMap = new Map<string, string>();
+  const imagesOnly = new Set<string>(); // 이미지만 올리는 항목 (가져오는 쪽 id)
   let replaced = 0;
-  if (opts.replace)
-    for (const { incoming, existing } of existingPackages(data)) {
-      idMap.set(incoming, existing.id);
-      const old = Object.values(state.images).filter((m) => m.ownerId === existing.id).map((m) => m.id);
-      if (old.length) await deleteImages(old);
-      replaced++;
-    }
+  for (const { incoming, existing } of existingPackages(data)) {
+    const mode = opts.modes?.[incoming] ?? (opts.replace ? "replace" : "add");
+    if (mode === "add") continue;
+    idMap.set(incoming, existing.id);
+    const mine = Object.values(state.images).filter((m) => m.ownerId === existing.id);
+    let old = mine;
+    if (mode === "images") {
+      imagesOnly.add(incoming);
+      // 같은 이름으로 저장될 것만 지워서 덮어쓴다 (직접 올린 다른 이미지는 그대로)
+      const names: string[] = [];
+      for (const x of data.images) if (x.ownerId === incoming) names.push(uniqueName(x.name, names));
+      const set = new Set(names.map((n) => n.toLowerCase()));
+      old = mine.filter((m) => set.has(m.name.toLowerCase()));
+    } else replaced++;
+    if (old.length) await deleteImages(old.map((m) => m.id));
+  }
   if (idMap.size) {
     const keep = (e: Entity) => state.library[idMap.get(e.id)!] as Character | World;
+    const remapWorld = (e: Entity): Entity => (e.kind === "character" && e.worldId && idMap.has(e.worldId) ? { ...e, worldId: idMap.get(e.worldId)! } : e);
     data = {
       ...data,
-      library: data.library.map((e) => (idMap.has(e.id) ? ({ ...e, id: idMap.get(e.id)!, createdAt: keep(e).createdAt, ...(e.kind === "character" && keep(e).kind === "character" && (keep(e) as Character).worldId ? { worldId: (keep(e) as Character).worldId } : {}) } as Entity) : e)),
+      library: data.library
+        .filter((e) => !imagesOnly.has(e.id))
+        .map((e) => (idMap.has(e.id) ? ({ ...e, id: idMap.get(e.id)!, createdAt: keep(e).createdAt, ...(e.kind === "character" && keep(e).kind === "character" && (keep(e) as Character).worldId ? { worldId: (keep(e) as Character).worldId } : {}) } as Entity) : remapWorld(e))),
       images: data.images.map((x) => (idMap.has(x.ownerId) ? { ...x, ownerId: idMap.get(x.ownerId)! } : x)),
       ...(data.greeting ? { greeting: { ...data.greeting, characterId: idMap.get(data.greeting.characterId) ?? data.greeting.characterId } } : {}),
     };
@@ -434,7 +453,7 @@ export async function importRisu(data: RisuImport, opts: { greeting?: number; re
     open = r.id;
   }
   if (open) setState({ activeRoomId: open, view: "rooms" });
-  return { room: open, images, replaced };
+  return { room: open, images, replaced, imagesOnly: imagesOnly.size };
 }
 
 /* ---------------- 이미지 (RisuAI 에셋 · 감정 이미지) ---------------- */
