@@ -1,5 +1,5 @@
 import { T } from "./tuning";
-import { ratingText } from "./prompt";
+import { historyStart, ratingText } from "./prompt";
 import { P } from "./prompts";
 import type { ChatMessage } from "./providers";
 import type { Message, Room, Settings } from "./types";
@@ -16,13 +16,12 @@ const valid = (m: Message) => !m.error && m.text.trim().length > 0;
 
 /**
  * 아직 장기 기억에 반영되지 않은 메시지 중 정리 대상.
- * auto: AI에게 보내는 최근 contextMessages 개 밖으로 밀려난 것만, MEMORY_BATCH 이상일 때
+ * auto: AI에게 보내는 대화 밖으로 밀려난 것만 (historyStart 앞), MEMORY_BATCH 이상일 때
  * manual: 최근 MEMORY_KEEP_RECENT 개를 뺀 전부
  */
 export function pendingForMemory(room: Room, contextMessages: number, mode: "auto" | "manual"): Message[] {
   const msgs = room.messages.filter(valid);
-  const keep = mode === "auto" ? contextMessages : memoryKeepRecent();
-  const outside = msgs.slice(0, Math.max(0, msgs.length - keep));
+  const outside = msgs.slice(0, mode === "auto" ? historyStart(msgs, contextMessages) : Math.max(0, msgs.length - memoryKeepRecent()));
   const cursor = room.memoryCursorAt ?? -Infinity;
   const pending = outside.filter((m) => m.createdAt > cursor);
   if (mode === "auto" && pending.length < memoryBatch()) return [];

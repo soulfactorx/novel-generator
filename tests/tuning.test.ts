@@ -13,11 +13,11 @@ test("수치 정의: id 중복 없음, 기본값이 범위 안", () => {
 });
 test("바꾼 값이 실제로 쓰이고, 범위를 벗어나면 범위 안으로, 기본값으로 되돌리면 원래대로", () => {
   expect(outputTokensFor(DEFAULT_SETTINGS)).toBe(3500);
-  setTuning({ "chat.tokens.medium": 5000, "novel.chars.short": 2500, "memory.batch": 3 });
+  setTuning({ "chat.tokens.medium": 5000, "novel.chars.short": 2500, "memory.batch": 3, "chat.trimChunk": 1 });
   expect(outputTokensFor(DEFAULT_SETTINGS)).toBe(5000);
   expect(episodeLength("short")).toMatchObject({ chars: 2500, label: "짧게 (약 2,500자)" });
   const room: Room = { id: "r", title: "t", premise: "", memory: "", messages: Array.from({ length: 13 }, (_, i) => ({ id: `m${i}`, role: i % 2 ? "assistant" : "user", text: "x", createdAt: i })) as Room["messages"], createdAt: 0, updatedAt: 0, characterIds: [] };
-  expect(pendingForMemory(room, 10, "auto")).toHaveLength(3); // 자동 정리 기준 3
+  expect(pendingForMemory(room, 10, "auto")).toHaveLength(4); // 자동 정리 기준 3: 앞 3개 + 보내지 않는 AI 응답 1개(대화는 사용자 입력부터)
   setTuning({ "net.retries": 99 });
   expect(T("net.retries")).toBe(6);
   setTuning({});
