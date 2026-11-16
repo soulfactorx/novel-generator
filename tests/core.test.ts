@@ -69,6 +69,21 @@ describe("settings & content rating", () => {
     expect(h[3].content).toContain("[선택지]\n1. c1");
     expect(buildHistory(room({ messages: msgs }), 2).map((m) => m.role)).toEqual(["user", "assistant"]); // 잘린 앞부분은 장기 기억이 맡음
   });
+  test("한도를 넘으면 한꺼번에 덜어내 몇 턴 동안 앞부분이 그대로 (프롬프트 캐시)", () => {
+    const conv = (n: number) => Array.from({ length: n }, (_, i) => ({ id: String(i), role: (i % 2 ? "assistant" : "user") as "user" | "assistant", text: `m${i}`, createdAt: i }));
+    const first = (n: number) => buildHistory(room({ messages: conv(n) }), 40)[0].content;
+    expect(buildHistory(room({ messages: conv(40) }), 40)).toHaveLength(40);
+    // 41~50개: 10개를 덜어내 m10부터, 그 사이 앞부분은 같다
+    for (let n = 41; n <= 50; n++) expect(first(n)).toBe("m10");
+    expect(buildHistory(room({ messages: conv(50) }), 40)).toHaveLength(40);
+    expect(buildHistory(room({ messages: conv(41) }), 40)).toHaveLength(31);
+    expect(first(51)).toBe("m20");
+    // 덜어낸 자리가 AI 응답이면 다음 사용자 입력부터
+    const odd = [{ id: "x", role: "assistant" as const, text: "인사", createdAt: 0 }, ...conv(45).map((m) => ({ ...m, createdAt: m.createdAt + 1 }))];
+    expect(buildHistory(room({ messages: odd }), 40)[0].content).toBe("m10");
+    // 한도의 절반까지만 덜어낸다
+    expect(buildHistory(room({ messages: conv(11) }), 10).length).toBeGreaterThanOrEqual(5);
+  });
 });
 
 describe("E.No.S backup import", () => {

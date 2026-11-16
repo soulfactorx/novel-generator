@@ -72,16 +72,30 @@ export function instructionsOf(ctx: StoryContext): string {
 }
 
 /** AI에게 보낼 대화: 최근 N개, 오류 메시지 제외, 첫 메시지는 user 로 시작 */
+/**
+ * AI에게 보낼 대화의 시작 위치. 한도를 넘으면 하나씩 밀어내지 않고 chat.trimChunk 개씩 한꺼번에 덜어낸다.
+ * 그 사이 몇 턴 동안은 대화 앞부분이 그대로라 프롬프트 캐시가 맞는다 (하나씩 밀면 매 턴 앞부분이 바뀌어 캐시가 깨짐).
+ * 대화는 사용자 입력부터 시작해야 하므로 그 자리가 AI 응답이면 다음 사용자 입력까지 넘긴다.
+ * 이보다 앞의 메시지는 장기 기억이 맡는다 (memory.ts 의 pendingForMemory 도 같은 위치를 쓴다).
+ */
+export function historyStart(msgs: readonly { role: string }[], limit: number): number {
+  const over = msgs.length - limit;
+  if (over <= 0) return 0;
+  const chunk = Math.max(1, Math.min(T("chat.trimChunk"), Math.floor(limit / 2))); // 적어도 한도의 절반은 남긴다
+  let start = Math.ceil(over / chunk) * chunk;
+  while (start < msgs.length && msgs[start].role !== "user") start++;
+  return start;
+}
+
 export function buildHistory(room: Room, limit: number): { role: "user" | "assistant"; content: string }[] {
   const msgs = room.messages.filter((m) => !m.error && m.text.trim());
-  const recent = msgs.slice(-limit).map((m) => ({
+  const start = historyStart(msgs, limit);
+  const recent = msgs.slice(start).map((m) => ({
     role: m.role,
     content: m.role === "assistant" && m.choices?.length ? `${m.text}\n\n${CHOICE_MARKER}\n${m.choices.map((c, i) => `${i + 1}. ${c}`).join("\n")}` : m.text,
   }));
   // 대화가 AI 응답(인사말 등)으로 시작하면 버리지 말고 시작 요청 한 줄을 앞에 붙인다 (AI가 첫 장면을 알도록)
-  if (recent.length && recent[0].role !== "user" && msgs.length <= limit) recent.unshift({ role: "user", content: P("chat.start") });
-  // 최근 N개로 잘려서 AI 응답으로 시작하면 그 앞부분은 장기 기억이 맡으므로 첫 사용자 입력부터
-  while (recent.length && recent[0].role !== "user") recent.shift();
+  if (recent.length && recent[0].role !== "user" && start === 0) recent.unshift({ role: "user", content: P("chat.start") });
   return recent;
 }
 

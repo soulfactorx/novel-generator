@@ -34,8 +34,10 @@ describe("prompt with library", () => {
 
 describe("memory", () => {
   test("auto waits for a batch outside the context window; cursor respected", () => {
-    const r = room({ messages: msgs(40 + MEMORY_BATCH - 1) });
+    const r = room({ messages: msgs(40) });
     expect(pendingForMemory(r, 40, "auto")).toHaveLength(0);
+    // 한도를 1개만 넘어도 10개를 한꺼번에 덜어내므로(프롬프트 캐시), 보내지 않는 10개가 바로 정리 대상
+    expect(pendingForMemory(room({ messages: msgs(41) }), 40, "auto").map((m) => m.id)).toEqual(msgs(MEMORY_BATCH).map((m) => m.id));
     const r2 = room({ messages: msgs(40 + MEMORY_BATCH) });
     expect(pendingForMemory(r2, 40, "auto").map((m) => m.id)).toEqual(msgs(MEMORY_BATCH).map((m) => m.id));
     expect(pendingForMemory({ ...r2, memoryCursorAt: 5 }, 40, "auto")).toHaveLength(0);

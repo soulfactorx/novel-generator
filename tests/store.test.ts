@@ -129,12 +129,29 @@ describe("library & memory in store", () => {
     expect(calls[1].body.messages[0].content[0].text ?? calls[1].body.messages[0].content).toContain("옛 대화 0");
     const r = s.getState().rooms[id];
     expect(r.memory).toBe("- 갱신된 줄거리");
-    expect(r.memoryCursorAt).toBe(12); // 22개 중 최근 10개 밖 → 12개 정리
+    expect(r.memoryCursorAt).toBe(16); // 22개, 한도 10 → 5개씩 덜어내 15번째부터(AI 응답이라 16번째 사용자 입력부터) 보냄 → 앞 16개 정리
     expect(s.getState().memoryJob).toBeNull();
     // 바로 다음 턴엔 새로 밀려난 게 2개뿐 → 정리 안 함
     const c2 = mockFetch(claudeStream("다음"));
     await s.send(id, "또");
     expect(c2).toHaveLength(1);
+  });
+
+  test("한도를 넘은 긴 대화에서도 다음 턴 요청이 직전 요청의 캐시 지점까지 같은 앞부분 (프롬프트 캐시)", async () => {
+    const s = await freshStore();
+    s.updateSettings({ provider: "anthropic", keys, contextMessages: 10, autoMemory: false });
+    const id = s.createRoom();
+    s.updateRoom(id, { messages: Array.from({ length: 12 }, (_, i) => ({ id: "o" + i, role: (i % 2 ? "assistant" : "user") as "user" | "assistant", text: "옛 대화 " + i, createdAt: i + 1 })) });
+    const c1 = mockFetch(claudeStream("장면 1"));
+    await s.send(id, "하나");
+    const c2 = mockFetch(claudeStream("장면 2"));
+    await s.send(id, "둘");
+    const a = c1[0].body, b = c2[0].body;
+    expect(b.system).toEqual(a.system);
+    const mark = a.messages.findIndex((m: any) => m.content[0].cache_control);
+    expect(mark).toBeGreaterThan(0);
+    // 직전 요청에서 캐시해 둔 지점까지 그대로 → 다음 요청이 캐시를 읽는다
+    expect(b.messages.slice(0, mark + 1).map((m: any) => m.content[0].text)).toEqual(a.messages.slice(0, mark + 1).map((m: any) => m.content[0].text));
   });
 
   test("memory failure is reported but keeps the story", async () => {
