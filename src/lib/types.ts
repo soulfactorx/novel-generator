@@ -40,6 +40,21 @@ export interface Settings {
   dialogueColors: boolean; // 대사(따옴표)를 다른 색으로
   dialogueColor: string; // 대사 색 (#rrggbb, 빈 값이면 기본 색)
   readWidth: "narrow" | "wide" | "full"; // 본문 폭: 좁게(48rem) · 보통(72rem) · 화면 가득
+  /** 사이드바 자동 정리 (이야기 · 소설 따로) */
+  organize: { rooms: OrganizeRule; novels: OrganizeRule };
+}
+
+/** 사이드바 폴더 자동 정리 규칙 */
+export interface OrganizeRule {
+  by: "none" | "character" | "world" | "activity" | "status"; // status: 소설만 (연재 중 · 완결)
+  archiveDays: number; // 이만큼 안 쓴 것은 보관함으로 (0 = 끔)
+  auto: boolean; // 새로 만들거나 바뀔 때마다 자동으로 (끄면 [지금 정리]를 누를 때만)
+}
+/** 사이드바 폴더 (레코드에 폴더 이름을 저장 → 동기화에 함께 실림). 자세한 규칙은 lib/folders.ts */
+export interface FolderFields {
+  folder?: string;
+  folderAuto?: boolean; // true: 자동 정리가 넣음 · false: 직접 정함
+  folderPrev?: { folder?: string; manual: boolean }; // 보관함에 넣기 전 자리
 }
 
 /** 메시지·회차에 붙는 사용량 (usd: 단가를 아는 경우) */
@@ -67,7 +82,7 @@ export interface Message {
   createdAt: number;
 }
 
-export interface Room {
+export interface Room extends FolderFields {
   id: string;
   title: string;
   premise: string; // 이 이야기만의 추가 설정 메모 (시스템 프롬프트에 포함)
@@ -225,6 +240,7 @@ export const DEFAULT_SETTINGS: Settings = {
   dialogueColors: true,
   dialogueColor: "",
   readWidth: "wide",
+  organize: { rooms: { by: "none", archiveDays: 0, auto: false }, novels: { by: "none", archiveDays: 0, auto: false } },
 };
 
 export interface RisuOptions {
@@ -238,6 +254,12 @@ export interface RisuOptions {
 }
 
 /** 저장된 설정을 기본값과 병합 (새 항목이 추가돼도 안전) */
+const RULE_BY: OrganizeRule["by"][] = ["none", "character", "world", "activity", "status"];
+function normalizeRule(raw: unknown, novels: boolean): OrganizeRule {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Partial<OrganizeRule>;
+  const by = RULE_BY.includes(r.by as OrganizeRule["by"]) && (novels || r.by !== "status") ? (r.by as OrganizeRule["by"]) : "none";
+  return { by, archiveDays: Math.min(3650, Math.max(0, Math.round(Number(r.archiveDays) || 0))), auto: !!r.auto };
+}
 export function normalizeSettings(raw: unknown): Settings {
   const r = (raw && typeof raw === "object" ? raw : {}) as Partial<Settings>;
   const s: Settings = {
@@ -263,6 +285,8 @@ export function normalizeSettings(raw: unknown): Settings {
   if (typeof s.dialogueColor !== "string" || !/^#[0-9a-f]{6}$/i.test(s.dialogueColor)) s.dialogueColor = "";
   s.readerFontSize = Math.min(28, Math.max(13, Math.round(Number(s.readerFontSize) || 18)));
   s.contextMessages = Math.min(400, Math.max(4, Math.round(Number(s.contextMessages) || 40)));
+  const org = (r.organize ?? {}) as Partial<Settings["organize"]>;
+  s.organize = { rooms: normalizeRule(org.rooms, false), novels: normalizeRule(org.novels, true) };
   return s;
 }
 
@@ -290,7 +314,7 @@ export interface Episode {
   createdAt: number;
   updatedAt: number;
 }
-export interface Novel {
+export interface Novel extends FolderFields {
   id: string;
   title: string;
   author: string;
