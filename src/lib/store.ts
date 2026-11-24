@@ -16,10 +16,11 @@ import { buildEpisodeDiagnosis, buildRoomDiagnosis, splitDiagnosis } from "./dia
 import { decodePayload, encodePayload } from "./sync/codec";
 import { GistClient, GistError } from "./sync/gist";
 import { mergeSnapshots, type Snapshot } from "./sync/merge";
+import { ARCHIVE, groupOf, novelActiveAt, planOrganize, roomActiveAt, withFolder, type FolderPatch, type OrganizeItem } from "./folders";
 import { PROVIDER_LABEL } from "./providers/catalog";
 import { buildEpisodeRequest, buildOutlineRequest, episodeLength, parseOutline, previewEpisode, splitEpisode } from "./novel";
 import { setTuning, T } from "./tuning";
-import { DEFAULT_SETTINGS, type MessageUsage, normalizeNovel, normalizeRoom, normalizeSettings, type Character, type Entity, type EntityKind, type Episode, type ImageMeta, type Message, type Novel, type Persona, type Room, type Settings, type World } from "./types";
+import { DEFAULT_SETTINGS, type MessageUsage, normalizeNovel, normalizeRoom, normalizeSettings, type Character, type Entity, type EntityKind, type Episode, type ImageMeta, type Message, type Novel, type Persona, type OrganizeRule, type Room, type Settings, type World } from "./types";
 
 export interface LiveState {
   roomId: string;
@@ -1125,6 +1126,89 @@ export function createNovel(init: Partial<Novel> = {}): string {
   setState({ activeNovelId: n.id, view: "novels" });
   return n.id;
 }
+/* ---------------- 사이드바 폴더 · 자동 정리 (lib/folders.ts) ---------------- */
+export type FolderKind = "rooms" | "novels";
+/**
+ * 폴더 변경 적용. updatedAt 은 1ms 만 올린다 → 동기화로 다른 기기에 전해지면서 최근 순 정렬은 그대로.
+ */
+function patchFolders(kind: FolderKind, patches: Map<string, FolderPatch>): number {
+  let n = 0;
+  setState((s) => {
+    const coll = { ...s[kind] } as Record<string, Room | Novel>;
+    for (const [id, p] of patches) {
+      const x = coll[id];
+      if (!x) continue;
+      coll[id] = { ...withFolder(x, p), updatedAt: x.updatedAt + 1 };
+      dirty[kind].add(id);
+      n++;
+    }
+    return (kind === "rooms" ? { rooms: coll as Record<string, Room> } : { novels: coll as Record<string, Novel> });
+  });
+  if (n) {
+    markSyncDirty();
+    scheduleSave();
+  }
+  return n;
+}
+const folderItems = (kind: FolderKind) => Object.values(state[kind] as Record<string, Room | Novel>);
+/** 직접 폴더에 넣기 (name 이 없으면 폴더 밖으로). 자동 정리는 이것을 건드리지 않는다 */
+export function moveToFolder(kind: FolderKind, ids: string[], name?: string) {
+  return patchFolders(kind, new Map(ids.map((id) => [id, { folder: name || undefined, folderAuto: false }])));
+}
+/** 폴더 이름 바꾸기 (같은 이름의 폴더가 있으면 합쳐짐) */
+export function renameFolder(kind: FolderKind, from: string, to: string) {
+  if (!to || to === from) return 0;
+  return patchFolders(kind, new Map(folderItems(kind).filter((x) => x.folder === from).map((x) => [x.id, { folder: to, folderAuto: false, folderPrev: x.folderPrev }])));
+}
+/** 폴더 풀기: 안의 항목은 폴더 밖으로 (항목은 지우지 않음, 자동 정리가 다시 넣지 않게 '직접 정함'으로) */
+export function dissolveFolder(kind: FolderKind, name: string) {
+  return patchFolders(kind, new Map(folderItems(kind).filter((x) => x.folder === name).map((x) => [x.id, { folder: undefined, folderAuto: false }])));
+}
+/** 자동 정리 계획 (미리보기 · 적용 공통) */
+export function planFolders(kind: FolderKind, rule: OrganizeRule, o: { includeManual?: boolean; now?: number } = {}) {
+  const now = o.now ?? Date.now();
+  const lib = state.library;
+  const items: OrganizeItem[] =
+    kind === "rooms"
+      ? Object.values(state.rooms).map((r) => {
+          const at = roomActiveAt(r);
+          return { id: r.id, folder: r.folder, folderAuto: r.folderAuto, folderPrev: r.folderPrev, activeAt: at, group: groupOf(rule.by, r, lib, at, now) };
+        })
+      : Object.values(state.novels).map((n) => {
+          const at = novelActiveAt(n);
+          return { id: n.id, folder: n.folder, folderAuto: n.folderAuto, folderPrev: n.folderPrev, activeAt: at, group: groupOf(rule.by, n, lib, at, now, n.episodes.length >= n.episodeCount) };
+        });
+  return planOrganize(items, rule, now, { includeManual: o.includeManual });
+}
+/** 지금 정리. 바뀐 항목 수를 돌려준다 */
+export function organizeNow(kind: FolderKind, o: { includeManual?: boolean; rule?: OrganizeRule } = {}) {
+  return patchFolders(kind, planFolders(kind, o.rule ?? state.settings.organize[kind], o));
+}
+/** 자동으로 넣은 폴더를 모두 풀기 (직접 넣은 것은 그대로) */
+export function clearAutoFolders(kind: FolderKind) {
+  return patchFolders(kind, new Map(folderItems(kind).filter((x) => x.folderAuto === true).map((x) => [x.id, { folder: x.folder === ARCHIVE ? x.folderPrev?.folder : undefined, folderAuto: x.folder === ARCHIVE && x.folderPrev?.manual ? false : undefined }])));
+}
+/** 자동 정리가 켜져 있으면: 항목이 바뀌면 잠시 뒤, 그리고 시간이 지나 보관·최근 활동 기준이 바뀌는 것을 위해 주기적으로 */
+let organizeTimer: ReturnType<typeof setTimeout> | undefined;
+let organizeSeen: { rooms: unknown; novels: unknown; rule: unknown } = { rooms: null, novels: null, rule: null };
+export function runAutoOrganize() {
+  if (!state.ready) return;
+  if (state.live || state.novelLive) return scheduleAutoOrganize(5000); // 쓰는 중에는 미룸
+  for (const kind of ["rooms", "novels"] as const) if (state.settings.organize[kind].auto) organizeNow(kind);
+}
+function scheduleAutoOrganize(ms = 1500) {
+  clearTimeout(organizeTimer);
+  organizeTimer = setTimeout(runAutoOrganize, ms);
+}
+subscribe(() => {
+  const o = state.settings.organize;
+  if (!state.ready || !(o.rooms.auto || o.novels.auto)) return;
+  if (organizeSeen.rooms === state.rooms && organizeSeen.novels === state.novels && organizeSeen.rule === o) return;
+  organizeSeen = { rooms: state.rooms, novels: state.novels, rule: o };
+  scheduleAutoOrganize();
+});
+if (typeof setInterval !== "undefined" && typeof window !== "undefined") setInterval(runAutoOrganize, 30 * 60_000);
+
 export function deleteNovel(id: string) {
   if (state.novelLive?.novelId === id) stopNovel();
   setState((s) => {
